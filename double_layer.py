@@ -2,10 +2,15 @@ __author__ = 'aliowen'
 import numpy as np
 from scipy import optimize, stats
 
+
+class EarlyStop(Exception):
+    pass
+
+
 class NN():
 
     def __init__(self,  hidden_layer, hidden_layer_2=0, reg_lambda=0.0,
-                 opti_method='sigmoid', maxiter=500, dropout=False, p=0.5):
+                 opti_method='CG', maxiter=500, dropout=False, p=0.5, alpha=0.2):
         self.reg_lambda = reg_lambda
         self.hidden_layer = hidden_layer
         if hidden_layer_2 == 0:
@@ -18,6 +23,10 @@ class NN():
         self.maxiter = maxiter
         self.dropout = dropout
         self.p = p
+        self.iters = 0
+        self.min_loss = 20
+        self.cross_val = list()
+        self.alpha = alpha
 
     def sigmoid(self, z):
         return 1 / (1 + np.exp(-z))
@@ -149,7 +158,7 @@ class NN():
 
         return self.pack_thetas(Theta1_grad, Theta2_grad, Theta3_grad)
 
-    def fit(self, X, y):
+    def fit(self, X, y, X_cv=None, y_cv=None):
         input_layer = X.shape[1]
         output_layer = len(set(y))
 
@@ -158,8 +167,39 @@ class NN():
         theta3_0 = self.rand_init(self.hidden_layer_2, output_layer)
         thetas0 = self.pack_thetas(theta1_0, theta2_0, theta3_0)
 
+        def stop(thetas):
+            """
+            Callback function from scipy.optimize.minimize, attempts to implement early stopping to reduce
+            overfitting
+            :param thetas: Weights for this iteration
+            :return: None, will raise an exception if require to stop early
+            """
+            if X_cv is None and y_cv is None:
+                pass
+            else:
+                self.iters += 1
+                input_layer = X.shape[1]
+                output_layer = len(set(y))
+                t1, t2, t3 = self.unpack_thetas(thetas, input_layer, self.hidden_layer, self.hidden_layer_2,
+                                                 output_layer)
+                _,_,_,_,_,_,test_results = self.feed_forward(X_cv, t1, t2, t3)
+                Y = np.eye(len(set(y)))[y_cv]
+                logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
+                if logloss < self.min_loss:
+                    self.min_loss = logloss
+                    self.t1, self.t2, self.t3 = t1, t2, t3
+                loss_rate = logloss / self.min_loss - 1
+                if not self.iters % 20:
+                    print("Iterations: ", self.iters, "; ", "Loss Rate:", loss_rate, "; ",
+                          "Min Loss: ", self.min_loss, "Score:", logloss)
+                    # save cross_validation scores for plotting
+                    self.cross_val.append(logloss)
+                if logloss < 1 and loss_rate > self.alpha:
+                    print("Loss_rate too high, logloss:", logloss)
+                    raise EarlyStop
+
         options = {'maxiter': self.maxiter, 'disp': True}
-        _res = optimize.minimize(self.cost_function, thetas0, jac=self.gradient,
+        _res = optimize.minimize(self.cost_function, thetas0, jac=self.gradient, callback=stop,
                                  method=self.method, args=(input_layer, self.hidden_layer, self.hidden_layer_2,
                                                            output_layer, X, y, self.reg_lambda), options=options)
         self.t1, self.t2, self.t3 = self.unpack_thetas(_res.x, input_layer, self.hidden_layer,
@@ -190,9 +230,9 @@ y = train.iloc[:, 94]
 # convert labels into integers
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
-X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.1)
+X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
 
-nn = NN(hidden_layer=50, hidden_layer_2=25, maxiter=250, opti_method='CG', reg_lambda=0.0)
+nn = NN(hidden_layer=100, hidden_layer_2=50, maxiter=2000, reg_lambda=0.0)
 
 if nn.dropout is True:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
@@ -210,7 +250,10 @@ if nn.dropout is True:
     t3 = (t3 / n) * nn.p
     _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, t1, t2, t3)
 else:
-    nn.fit(X_train, y_train)
+    try:
+        nn.fit(X_train, y_train, X_cv, y_cv)
+    except EarlyStop:
+        pass
     _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
 Y = np.eye(len(set(y)))[y_cv]
 logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
