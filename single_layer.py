@@ -4,7 +4,7 @@ from scipy import optimize, stats
 
 class NN():
 
-    def __init__(self,  hidden_layer, reg_lambda=0, epsilon=0.12,
+    def __init__(self,  hidden_layer, reg_lambda=0.0, epsilon=0.12,
                  opti_method='sigmoid', maxiter=500, dropout=False, p=0.5):
         self.reg_lambda = reg_lambda
         self.epsilon = epsilon
@@ -151,7 +151,7 @@ class NN():
 
 from sklearn import cross_validation
 
-# np.random.seed(seed=15)
+np.random.seed(seed=15)
 
 import pandas as pd
 from sklearn import preprocessing
@@ -167,7 +167,7 @@ int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
 
-nn = NN(hidden_layer=50, maxiter=100, opti_method='CG', reg_lambda=2.21, dropout=True)
+nn = NN(hidden_layer=50, maxiter=500, opti_method='CG', reg_lambda=2.21)
 
 if nn.dropout is True:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
