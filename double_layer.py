@@ -190,9 +190,9 @@ y = train.iloc[:, 94]
 # convert labels into integers
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
-X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
+X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.1)
 
-nn = NN(hidden_layer=100, hidden_layer_2=50, maxiter=500, opti_method='CG', reg_lambda=2.21, dropout=True)
+nn = NN(hidden_layer=50, hidden_layer_2=25, maxiter=250, opti_method='CG', reg_lambda=0.0)
 
 if nn.dropout is True:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
