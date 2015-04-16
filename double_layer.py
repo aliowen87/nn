@@ -81,11 +81,20 @@ class NN():
             a2 = a2.T * r
             a2 = a2.T
 
+        # add bias units
         a2 = np.hstack((bias, a2.T))
 
         # hidden layer 2
         z3 = np.dot(t2, a2.T)
         a3 = self.activation_func(z3)
+
+        # dropout hidden layer 2
+        if self.dropout is True:
+            r = stats.bernoulli.rvs(self.p, size=self.hidden_layer_2)
+            a3 = a3.T * r
+            a3 = a3.T
+
+        # add bias units
         a3 = np.hstack((bias, a3.T))
 
         # output layer
@@ -183,12 +192,12 @@ int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
 
-nn = NN(hidden_layer=50, hidden_layer_2=25, maxiter=500, opti_method='CG', reg_lambda=2.21)
+nn = NN(hidden_layer=100, hidden_layer_2=50, maxiter=500, opti_method='CG', reg_lambda=2.21, dropout=True)
 
 if nn.dropout is True:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
-    t2 = np.zeros((nn.hidden_layer, nn.hidden_layer + 1))
-    t3 = np.zeros((len(set(y_train)), nn.hidden_layer + 1))
+    t2 = np.zeros((nn.hidden_layer_2, nn.hidden_layer + 1))
+    t3 = np.zeros((len(set(y_train)), nn.hidden_layer_2 + 1))
     # number of times to run algorithm
     n = 25
     for i in range(n):
@@ -206,7 +215,8 @@ else:
 Y = np.eye(len(set(y)))[y_cv]
 logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
 print("Score=", logloss)
-print("hidden_layer_no=", nn.hidden_layer)
+print("hidden layer size=", nn.hidden_layer)
+print("hidden layer 2 size=", nn.hidden_layer_2)
 print("Lambda=", nn.reg_lambda)
 
 
