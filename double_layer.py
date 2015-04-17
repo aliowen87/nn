@@ -13,16 +13,17 @@ class NN():
 
     def __init__(self,  hidden_layer, hidden_layer_2=0, reg_lambda=0.0,
                  opti_method='CG', maxiter=500, dropout=None, p=0.5, alpha=0.1, activation='sigmoid'):
+        self.activation = activation
         activation_dict = {'sigmoid': self.sigmoid, 'sigmoid_prime': self.sigmoid_prime,
-                      'tanh': self.tanh, 'tanh_prime': self.tanh_prime}
+                           'tanh': self.tanh, 'tanh_prime': self.tanh_prime}
         self.reg_lambda = reg_lambda
         self.hidden_layer = hidden_layer
         if hidden_layer_2 == 0:
             self.hidden_layer_2 = hidden_layer
         else:
             self.hidden_layer_2 = hidden_layer_2
-        self.activation_func = activation_dict[activation]
-        self.activation_func_prime = activation_dict[activation + '_prime']
+        self.activation_func = activation_dict[self.activation]
+        self.activation_func_prime = activation_dict[self.activation + '_prime']
         self.method = opti_method
         self.maxiter = maxiter
         self.dropout = dropout
@@ -132,7 +133,7 @@ class NN():
 
         # output layer
         z4 = np.dot(t3, a3.T)
-        a4 = self.activation_func(z4)
+        a4 = self.sigmoid(z4)
         return a1, z2, a2, z3, a3, z4, a4
 
     def cost_function(self, thetas, input_layer, hidden_layer, hidden_layer_2, output_layer,
@@ -142,7 +143,7 @@ class NN():
         Y = np.eye(output_layer)[y]
 
         _, _, _, _, _, _, h = self.feed_forward(X, t1, t2, t3)
-        J = np.sum(-Y * np.log(h).T - (1 - Y) * np.log(1 - h).T) / m
+        J = - np.sum(Y * np.log(h).T + (1 - Y) * np.log(1 - h).T) / m
 
         # regularisation of cost
         if reg_lambda != 0:
@@ -156,6 +157,19 @@ class NN():
 
     def gradient(self, thetas, input_layer, hidden_layer, hidden_layer_2, output_layer,
                  X, y, reg_lambda):
+        """
+        Backprop implementation that returns the gradient of the current weights based on the output
+        of the feedforward function
+        :param thetas: Weight matrices
+        :param input_layer: number of features
+        :param hidden_layer: size of hidden layer
+        :param hidden_layer_2: size of second hidden layer
+        :param output_layer: number of classes
+        :param X: training cases
+        :param y: training targets
+        :param reg_lambda: regularisation parameter
+        :return: gradient
+        """
         t1, t2, t3 = self.unpack_thetas(thetas, input_layer, hidden_layer, hidden_layer_2,
                                         output_layer)
         m = X.shape[0]
@@ -289,7 +303,7 @@ int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
 
-nn = NN(hidden_layer=350, hidden_layer_2=100, maxiter=5000, reg_lambda=2, alpha=0.07, activation='sigmoid')
+nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=500, reg_lambda=2, alpha=0.07, activation='tanh')
 
 if nn.dropout:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
