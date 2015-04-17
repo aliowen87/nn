@@ -2,6 +2,8 @@ __author__ = 'aliowen'
 import numpy as np
 from scipy import optimize, stats
 
+# TODO: Gradient checking function
+# TODO: Take Otto test code into a separate .py
 
 class EarlyStop(Exception):
     pass
@@ -10,15 +12,17 @@ class EarlyStop(Exception):
 class NN():
 
     def __init__(self,  hidden_layer, hidden_layer_2=0, reg_lambda=0.0,
-                 opti_method='CG', maxiter=500, dropout=False, p=0.5, alpha=0.2):
+                 opti_method='CG', maxiter=500, dropout=None, p=0.5, alpha=0.1, activation='sigmoid'):
+        activation_dict = {'sigmoid': self.sigmoid, 'sigmoid_prime': self.sigmoid_prime,
+                      'tanh': self.tanh, 'tanh_prime': self.tanh_prime}
         self.reg_lambda = reg_lambda
         self.hidden_layer = hidden_layer
         if hidden_layer_2 == 0:
             self.hidden_layer_2 = hidden_layer
         else:
             self.hidden_layer_2 = hidden_layer_2
-        self.activation_func = self.sigmoid
-        self.activation_func_prime = self.sigmoid_prime
+        self.activation_func = activation_dict[activation]
+        self.activation_func_prime = activation_dict[activation + '_prime']
         self.method = opti_method
         self.maxiter = maxiter
         self.dropout = dropout
@@ -66,45 +70,65 @@ class NN():
         t3 = thetas[t2_end:].reshape((output_layer, hidden_layer_2 + 1))
         return t1, t2, t3
 
+    def dropout_layer(self, input):
+        """
+        Apply dropout to input matrix using Bernoulli distribution, can either be the activated
+        input matrix a(W x (V +b)) or the weight matrix (LeCun)
+        :param input: Input matrix
+        :return: Dropped out matrix
+        """
+        r = stats.bernoulli.rvs(p=self.p, size=input.shape)
+        return r * input
+
     def feed_forward(self, X, t1, t2, t3):
         m = X.shape[0]
         if len(X.shape) == 1:
             bias = np.array(1).reshape(1, )
         else:
             bias = np.ones(m).reshape(m, 1)
+        # TODO: Dropout needs to be applied with a separate Bernoulli distro per training case
+        # TODO: Refactor into dropout class function
         # dropout some features
-        if self.dropout is True:
-            r = stats.bernoulli.rvs(self.p, size=X.shape[1])
-            X = X * r.T
+        # if self.dropout is True:
+        #     r = stats.bernoulli.rvs(0.9, size=X.shape)
+        #     X = X * r
 
         # input layer
         a1 = np.hstack((bias, X))
+
+        # dropconnect
+        if self.dropout == 'connect':
+            t1 = self.dropout_layer(t1)
 
         # hidden layer
         z2 = np.dot(t1, a1.T)
         a2 = self.activation_func(z2)
 
-        # dropout hidden layer
-        if self.dropout is True:
-            r = stats.bernoulli.rvs(self.p, size=self.hidden_layer)
-            a2 = a2.T * r
-            a2 = a2.T
+        # dropout
+        if self.dropout == 'dropout':
+            a2 = self.dropout_layer(a2)
 
         # add bias units
         a2 = np.hstack((bias, a2.T))
+
+        # dropconnect
+        if self.dropout == 'connect':
+            t2 = self.dropout_layer(t2)
 
         # hidden layer 2
         z3 = np.dot(t2, a2.T)
         a3 = self.activation_func(z3)
 
         # dropout hidden layer 2
-        if self.dropout is True:
-            r = stats.bernoulli.rvs(self.p, size=self.hidden_layer_2)
-            a3 = a3.T * r
-            a3 = a3.T
+        if self.dropout == 'dropout':
+            a3 = self.dropout_layer(a3)
 
         # add bias units
         a3 = np.hstack((bias, a3.T))
+
+        # dropconnect
+        if self.dropout == 'connect':
+            t3 = self.dropout_layer(t3)
 
         # output layer
         z4 = np.dot(t3, a3.T)
@@ -159,6 +183,18 @@ class NN():
         return self.pack_thetas(Theta1_grad, Theta2_grad, Theta3_grad)
 
     def fit(self, X, y, X_cv=None, y_cv=None):
+        """
+        Uses scipy.optimize.minimize function e.g. CG to minimise the cost of the NN using the gradient
+        from backpropagation.
+
+        Callback function performs cross validation on each iteration and prints the error every few
+        iterations, performs early stopping and updates weights for the lowest CV error.
+        :param X: Training inputs
+        :param y: Training targets
+        :param X_cv: Cross validation inputs
+        :param y_cv: Cross validation targets
+        :return: None, updates class variables for weights (t1, t2, t3)
+        """
         input_layer = X.shape[1]
         output_layer = len(set(y))
 
@@ -174,7 +210,7 @@ class NN():
             :param thetas: Weights for this iteration
             :return: None, will raise an exception if require to stop early
             """
-            if X_cv is None and y_cv is None:
+            if X_cv is None or y_cv is None:
                 pass
             else:
                 self.iters += 1
@@ -191,11 +227,11 @@ class NN():
                 loss_rate = logloss / self.min_loss - 1
                 if not self.iters % 20:
                     print("Iterations: ", self.iters, "; ", "Loss Rate:", loss_rate, "; ",
-                          "Min Loss: ", self.min_loss, "Score:", logloss)
+                          "Min Loss: ", self.min_loss)
                     # save cross_validation scores for plotting
                     self.cross_val.append(logloss)
-                if logloss < 1 and loss_rate > self.alpha:
-                    print("Loss_rate too high, logloss:", logloss)
+                if self.iters > 250 and loss_rate > self.alpha:
+                    print("Loss rate too high:", loss_rate)
                     raise EarlyStop
 
         options = {'maxiter': self.maxiter, 'disp': True}
@@ -204,6 +240,27 @@ class NN():
                                                            output_layer, X, y, self.reg_lambda), options=options)
         self.t1, self.t2, self.t3 = self.unpack_thetas(_res.x, input_layer, self.hidden_layer,
                                                        self.hidden_layer_2, output_layer)
+
+    def check_gradient(self, X, y):
+        """
+        Gradient checking (troubleshooting function)
+        :param X: Training set
+        :param y: Training targets
+        :return: Error between numerical gradient and grad function
+        """
+        input_layer = X.shape[1]
+        output_layer = len(set(y))
+
+        theta1_0 = self.rand_init(input_layer, self.hidden_layer)
+        theta2_0 = self.rand_init(self.hidden_layer, self.hidden_layer_2)
+        theta3_0 = self.rand_init(self.hidden_layer_2, output_layer)
+        thetas0 = self.pack_thetas(theta1_0, theta2_0, theta3_0)
+
+        error = optimize.check_grad(self.cost_function, self.gradient, thetas0,
+                                    input_layer, self.hidden_layer, self.hidden_layer_2, output_layer, X, y,
+                                    self.reg_lambda, epsilon=10**-4)
+        print('Error=', error)
+        return error
 
     def predict(self, X):
         return self.predict_proba(X).argmax(0)
@@ -232,16 +289,19 @@ int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
 
-nn = NN(hidden_layer=100, hidden_layer_2=50, maxiter=2000, reg_lambda=0.0)
+nn = NN(hidden_layer=350, hidden_layer_2=100, maxiter=5000, reg_lambda=2, alpha=0.07, activation='sigmoid')
 
-if nn.dropout is True:
+if nn.dropout:
     t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
     t2 = np.zeros((nn.hidden_layer_2, nn.hidden_layer + 1))
     t3 = np.zeros((len(set(y_train)), nn.hidden_layer_2 + 1))
     # number of times to run algorithm
     n = 25
     for i in range(n):
-        nn.fit(X_train, y_train)
+        try:
+            nn.fit(X_train, y_train)
+        except EarlyStop:
+            pass
         t1 += nn.t1
         t2 += nn.t2
         t3 += nn.t3
