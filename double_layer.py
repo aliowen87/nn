@@ -13,7 +13,7 @@ class NN():
 
     def __init__(self,  hidden_layer, hidden_layer_2=0, reg_lambda=0.0,
                  opti_method='CG', maxiter=500, dropout=None, p=0.5, alpha=0.1, activation='sigmoid',
-                 eta=1):
+                 eta=10):
         self.activation = activation
         activation_dict = {'sigmoid': self.sigmoid, 'sigmoid_prime': self.sigmoid_prime,
                            'tanh': self.tanh, 'tanh_prime': self.tanh_prime}
@@ -264,7 +264,7 @@ class NN():
         self.t1, self.t2, self.t3 = self.unpack_thetas(_res.x, input_layer, self.hidden_layer,
                                                        self.hidden_layer_2, output_layer)
 
-    def sgd(self, X, y, X_cv=None, y_cv=None, mini_batch=2000):
+    def sgd(self, X, y, X_cv=None, y_cv=None, mini_batch=200):
         self.input_layer = X.shape[1]
         self.output_layer = len(set(y))
         # Y = np.eye(self.output_layer)[y]
@@ -285,7 +285,7 @@ class NN():
             J = self.cost_function(self.pack_thetas(self.t1, self.t2, self.t3), self.input_layer,
                                    self.hidden_layer, self.hidden_layer_2, self.output_layer,
                                    X_shuffled, y_shuffled, self.reg_lambda)
-            print("Epoch:", e, "J = ", J)
+            print("Epoch:", e + 1, "J = ", J)
 
 
     def update_mini_batch(self, X, y, m):
@@ -344,14 +344,15 @@ y = train.iloc[:, 94]
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
-nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')
+nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=500, reg_lambda=2, alpha=0.2, activation='tanh',
+        eta=1)
 nn.sgd(X_train, y_train)
 # try:
 #     nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')
 #     nn.fit(X_train, y_train, X_cv, y_cv)
 # except EarlyStop:
 #     pass
-# _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
+_,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
 Y = np.eye(len(set(y)))[y_cv]
 logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
 print("Score=", logloss)
