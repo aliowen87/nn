@@ -12,7 +12,8 @@ class EarlyStop(Exception):
 class NN():
 
     def __init__(self,  hidden_layer, hidden_layer_2=0, reg_lambda=0.0,
-                 opti_method='CG', maxiter=500, dropout=None, p=0.5, alpha=0.1, activation='sigmoid'):
+                 opti_method='CG', maxiter=500, dropout=None, p=0.5, alpha=0.1, activation='sigmoid',
+                 eta=1):
         self.activation = activation
         activation_dict = {'sigmoid': self.sigmoid, 'sigmoid_prime': self.sigmoid_prime,
                            'tanh': self.tanh, 'tanh_prime': self.tanh_prime}
@@ -32,6 +33,9 @@ class NN():
         self.min_loss = 20
         self.cross_val = list()
         self.alpha = alpha
+        self.input_layer = 0
+        self.output_layer = 0
+        self.eta = eta
 
     def sigmoid(self, z):
         return 1 / (1 + np.exp(-z))
@@ -140,10 +144,13 @@ class NN():
                       X, y, reg_lambda):
         t1, t2, t3 = self.unpack_thetas(thetas, input_layer, hidden_layer, hidden_layer_2, output_layer)
         m = X.shape[0]
-        Y = np.eye(output_layer)[y]
+        Y = np.eye(output_layer)[y.astype(int)].reshape(y.shape[0], output_layer)
 
         _, _, _, _, _, _, h = self.feed_forward(X, t1, t2, t3)
+        # cost function
         J = - np.sum(Y * np.log(h).T + (1 - Y) * np.log(1 - h).T) / m
+        # softmax cost
+        # J = -np.sum(Y * np.log(h). T) / m
 
         # regularisation of cost
         if reg_lambda != 0:
@@ -176,18 +183,20 @@ class NN():
         t1_flat = t1[:, 1:]
         t2_flat = t2[:, 1:]
         t3_flat = t3[:, 1:]
+        y = y.astype(int)
         Y = np.eye(output_layer)[y]
+        Y = Y.reshape(y.shape[0], output_layer)
 
         # vectorised implementation
         a1, z2, a2, z3, a3, z4, a4 = self.feed_forward(X, t1, t2, t3)
         # backprop
-        d4 = a4 - Y.T
-        d3 = np.dot(d4.T, t3_flat) * self.activation_func_prime(z3).T
-        d2 = np.dot(d3, t2_flat) * self.activation_func_prime(z2).T
+        d4 = a4.T - Y
+        d3 = np.dot(d4, t3_flat).T * self.activation_func_prime(z3)
+        d2 = np.dot(d3.T, t2_flat) * self.activation_func_prime(z2).T
 
         Theta1_grad = (1 / m) * np.dot(d2.T, a1)
-        Theta2_grad = (1 / m) * np.dot(d3.T, a2)
-        Theta3_grad = (1 / m) * np.dot(d4, a3)
+        Theta2_grad = (1 / m) * np.dot(d3, a2)
+        Theta3_grad = (1 / m) * np.dot(d4.T, a3)
 
         if reg_lambda != 0:
             Theta1_grad[:, 1:] = Theta1_grad[:, 1:] + (reg_lambda / m) * t1_flat
@@ -244,7 +253,7 @@ class NN():
                           "Min Loss: ", self.min_loss)
                     # save cross_validation scores for plotting
                     self.cross_val.append(logloss)
-                if self.iters > 250 and loss_rate > self.alpha:
+                if self.iters > self.maxiter / 10 and loss_rate > self.alpha:
                     print("Loss rate too high:", loss_rate)
                     raise EarlyStop
 
@@ -254,6 +263,41 @@ class NN():
                                                            output_layer, X, y, self.reg_lambda), options=options)
         self.t1, self.t2, self.t3 = self.unpack_thetas(_res.x, input_layer, self.hidden_layer,
                                                        self.hidden_layer_2, output_layer)
+
+    def sgd(self, X, y, X_cv=None, y_cv=None, mini_batch=2000):
+        self.input_layer = X.shape[1]
+        self.output_layer = len(set(y))
+        # Y = np.eye(self.output_layer)[y]
+        m = X.shape[0]
+        # initialise thetas
+        self.t1 = self.rand_init(self.input_layer, self.hidden_layer)
+        self.t2 = self.rand_init(self.hidden_layer, self.hidden_layer_2)
+        self.t3 = self.rand_init(self.hidden_layer_2, self.output_layer)
+        # process data for shuffling and batching
+        XY = np.hstack((X, y.reshape(y.shape[0], 1)))
+        for e in range(self.maxiter):
+            np.random.shuffle(XY)
+            X_shuffled = XY[:, :X.shape[1]]
+            y_shuffled = XY[:, -1:]
+            for j in range(0, m, mini_batch):
+                self.update_mini_batch(X_shuffled[j:j+mini_batch], y_shuffled[j:j+mini_batch], m)
+            _,_,_,_,_,_,h = self.feed_forward(X_shuffled, self.t1, self.t2, self.t3)
+            J = self.cost_function(self.pack_thetas(self.t1, self.t2, self.t3), self.input_layer,
+                                   self.hidden_layer, self.hidden_layer_2, self.output_layer,
+                                   X_shuffled, y_shuffled, self.reg_lambda)
+            print("Epoch:", e, "J = ", J)
+
+
+    def update_mini_batch(self, X, y, m):
+        thetas = self.pack_thetas(self.t1, self.t2, self.t3)
+        grad_theta = self.gradient(thetas, self.input_layer, self.hidden_layer, self.hidden_layer_2, self.output_layer,
+                                   X, y, self.reg_lambda)
+        t1_grad, t2_grad, t3_grad = self.unpack_thetas(grad_theta, self.input_layer, self.hidden_layer,
+                                                       self.hidden_layer_2, self.output_layer)
+        self.t1 = (1 - self.eta * self.reg_lambda/m) * self.t1 - (self.eta / X.shape[0]) * t1_grad
+        self.t2 = (1 - self.eta * self.reg_lambda/m) * self.t2 - (self.eta / X.shape[0]) * t2_grad
+        self.t3 = (1 - self.eta * self.reg_lambda/m) * self.t3 - (self.eta / X.shape[0]) * t3_grad
+
 
     def check_gradient(self, X, y):
         """
@@ -287,10 +331,8 @@ class NN():
 # testing
 
 from sklearn import cross_validation
-np.random.seed(seed=15)
 
 import pandas as pd
-from sklearn import preprocessing
 train = pd.read_csv('../otto/train.csv')
 np.random.shuffle(np.array(train))
 test = pd.read_csv('../otto/test.csv')
@@ -302,33 +344,14 @@ y = train.iloc[:, 94]
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
-
-nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=500, reg_lambda=2, alpha=0.07, activation='tanh')
-
-if nn.dropout:
-    t1 = np.zeros((nn.hidden_layer, X_train.shape[1] + 1))
-    t2 = np.zeros((nn.hidden_layer_2, nn.hidden_layer + 1))
-    t3 = np.zeros((len(set(y_train)), nn.hidden_layer_2 + 1))
-    # number of times to run algorithm
-    n = 25
-    for i in range(n):
-        try:
-            nn.fit(X_train, y_train)
-        except EarlyStop:
-            pass
-        t1 += nn.t1
-        t2 += nn.t2
-        t3 += nn.t3
-    t1 = (t1 / n) * nn.p
-    t2 = (t2 / n) * nn.p
-    t3 = (t3 / n) * nn.p
-    _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, t1, t2, t3)
-else:
-    try:
-        nn.fit(X_train, y_train, X_cv, y_cv)
-    except EarlyStop:
-        pass
-    _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
+nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')
+nn.sgd(X_train, y_train)
+# try:
+#     nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')
+#     nn.fit(X_train, y_train, X_cv, y_cv)
+# except EarlyStop:
+#     pass
+# _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
 Y = np.eye(len(set(y)))[y_cv]
 logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
 print("Score=", logloss)
