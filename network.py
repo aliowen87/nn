@@ -38,25 +38,32 @@ class Network(object):
             self.biases.append(bias)
             self.thetas.append(theta)
 
-    def feedforward(self, a):
+    def feedforward(self, a, p=1):
         """
         Return network's output based on input a. Used for testings, CV etc
         :param a: Inputs
         :return: Outputs
         """
         for b, t in zip(self.biases, self.thetas):
-            a = self.sigmoid(np.dot(a, t.T) + b)
+            bias = b * p
+            theta = t * p
+            a = self.sigmoid(np.dot(a, theta.T) + bias)
         return a
 
-    def dropout(self, x, p):
+    def dropout(self, X, p):
         """
         Dropout a number of elements depending on
         :param x: matrix to dropout
         :param p: probability of 1
         :return: Dropped out training matrix
         """
-        r = (np.ones(x.shape).T * stats.bernoulli.rvs(p, size=x.shape[0])).T
-        return x * r
+        # for each training examples
+        # drop a unit (feature or hidden) depending on bernoulli.rvs(p)
+        # r.shape = (1, 93)
+        r = np.zeros(X.shape)
+        for i in range(X.shape[0]):
+            r[i, :] = stats.bernoulli.rvs(p, size=(X.shape[1]))
+        return X * r
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta, lmbda=0.0, alpha=0.1,
                                     X_cv=None, y_cv=None, hidden_activation='sigmoid',
@@ -73,25 +80,24 @@ class Network(object):
         :param y_val: cross_validation labels
         :return:
         """
+        # TODO: Activation options
         m = X.shape[0]
         for j in range(epochs):
             Xy = np.hstack((X, y))
             np.random.shuffle(Xy)
             # dropout
-            # TODO: Multiply weights for CV test by p
-            Xy_dropout = self.dropout(Xy, p)
-            shuffled_X = Xy_dropout[:, :X.shape[1]]
-            shuffled_y = Xy_dropout[:, -y.shape[1]:]
+            shuffled_X = Xy[:, :X.shape[1]]
+            shuffled_y = Xy[:, -y.shape[1]:]
             for k in range(0, m, mini_batch_size):
                 mini_X = shuffled_X[k:k+mini_batch_size, :]
                 mini_y = shuffled_y[k:k+mini_batch_size, :]
-                self.update_mini_batch(mini_X, mini_y, eta, lmbda, m, mu)
+                self.update_mini_batch(mini_X, mini_y, eta, lmbda, m, mu, p)
             if score:
                 # save train accuracy for each epoch
-                h = self.feedforward(X)
+                h = self.feedforward(X, p)
                 self.train_accuracy.append(self.logloss(X, y, h))
             if X_cv is not None and y_cv is not None:
-                h_cv = self.feedforward(X_cv)
+                h_cv = self.feedforward(X_cv, p)
                 logloss = self.logloss(X_cv, y_cv, h_cv)
                 # save CV accuracy for each epoch
                 self.cv_accuracy.append(logloss)
@@ -109,14 +115,14 @@ class Network(object):
                     self.biases = self.min_bias
                     return None
             if not j % 10 and score:
-                h = self.feedforward(shuffled_X)
-                J = self.cost_function(shuffled_y, h, m, lmbda)
+                h = self.feedforward(shuffled_X, p)
+                J = self.cost_function(shuffled_y, h, m, lmbda, p)
                 print("Epoch", j, " | ", "Cost:", J, " | ", "CV Logloss:", logloss)
         # regularise by using the min CV values
         self.biases = self.min_bias
         self.thetas = self.min_theta
 
-    def update_mini_batch(self, X, y, eta, lmbda, m, mu):
+    def update_mini_batch(self, X, y, eta, lmbda, m, mu, p=1):
         """
         Update the network's weights and biases by applying gradient descent using the minibatch
         method.
@@ -129,7 +135,7 @@ class Network(object):
         """
 
         # get gradients using backprop
-        nabla_b, nabla_t = self.backprop(X, y)
+        nabla_b, nabla_t = self.backprop(X, y, p)
 
         # update weights
         # update bias: b - gradient + momentum
@@ -138,7 +144,7 @@ class Network(object):
         self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta*nt - mu * (t - nt))
                        for t, nt in zip(self.thetas, nabla_t)]
 
-    def backprop(self, X, y):
+    def backprop(self, X, y, p=1):
         """
         Calculaye the gradient for weights and biases
         :param X: Training cases
@@ -157,6 +163,8 @@ class Network(object):
             z = np.dot(activation, t.T) + b
             z_list.append(z)
             activation = self.sigmoid(z)
+            # dropout
+            activation = self.dropout(activation, p)
             activations.append(activation)
         # backprop
         delta = (activations[-1] - y)
@@ -170,11 +178,12 @@ class Network(object):
             nabla_t[-l] = (np.dot(delta.T, activations[-l-1]))
         return nabla_b, nabla_t
 
-    def cost_function(self, y, h, m, lmbda):
+    def cost_function(self, y, h, m, lmbda, p=1):
         J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) - (1 - y) * np.log(1 - h)))
         R = 0
         for t in self.thetas:
-            R += lmbda / (2 * m) * self.sumsqr(t)
+
+            R += lmbda / (2 * m) * self.sumsqr(t*p)
         return J + R
 
     def sumsqr(self, a):
