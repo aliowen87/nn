@@ -344,8 +344,8 @@ y = train.iloc[:, 94]
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # CV split
 X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
-nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=500, reg_lambda=2, alpha=0.2, activation='tanh',
-        eta=1)
+nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=1000, reg_lambda=2, alpha=0.2, activation='tanh',
+        eta=2)
 nn.sgd(X_train, y_train)
 # try:
 #     nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')

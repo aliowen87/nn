@@ -1,5 +1,6 @@
-__author__ = 'aliowen'
+__author__ = 'alaso0'
 import numpy as np
+import scipy.stats as stats
 
 # Stochastic Gradient Descent
 # Minibatch (data shuffled before input to network)
@@ -22,9 +23,9 @@ class Network(object):
         # early stopping
         self.min_bias = list()
         self.min_theta = list()
-        # momentum
-        self.theta_v = list()
-        self.bias_v = list()
+        # learning curves
+        self.train_accuracy = list()
+        self.cv_accuracy = list()
         self.min_loss = 100
         # initialise weights
         self.init_weights()
@@ -47,12 +48,19 @@ class Network(object):
             a = self.sigmoid(np.dot(a, t.T) + b)
         return a
 
-    def logloss(self, X, y, h):
-        return - (1 / X.shape[0]) * np.sum(y * np.log(h))
+    def dropout(self, x, p):
+        """
+        Dropout a number of elements depending on
+        :param x: matrix to dropout
+        :param p: probability of 1
+        :return: Dropped out training matrix
+        """
+        r = (np.ones(x.shape).T * stats.bernoulli.rvs(p, size=x.shape[0])).T
+        return x * r
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta, lmbda=0.0, alpha=0.1,
                                     X_cv=None, y_cv=None, hidden_activation='sigmoid',
-                                    output_activation='sigmoid', mu=1):
+                                    output_activation='sigmoid', mu=0, score=False, p=0.5):
         """
         Train the neural network using stochastic gradient descent (minibatch method).
         :param X: training inputs
@@ -67,17 +75,26 @@ class Network(object):
         """
         m = X.shape[0]
         for j in range(epochs):
-            Xy = np.hstack((X,y))
+            Xy = np.hstack((X, y))
             np.random.shuffle(Xy)
-            shuffled_X = Xy[:, :X.shape[1]]
-            shuffled_y = Xy[:, -y.shape[1]:]
+            # dropout
+            # TODO: Multiply weights for CV test by p
+            Xy_dropout = self.dropout(Xy, p)
+            shuffled_X = Xy_dropout[:, :X.shape[1]]
+            shuffled_y = Xy_dropout[:, -y.shape[1]:]
             for k in range(0, m, mini_batch_size):
                 mini_X = shuffled_X[k:k+mini_batch_size, :]
                 mini_y = shuffled_y[k:k+mini_batch_size, :]
                 self.update_mini_batch(mini_X, mini_y, eta, lmbda, m, mu)
+            if score:
+                # save train accuracy for each epoch
+                h = self.feedforward(X)
+                self.train_accuracy.append(self.logloss(X, y, h))
             if X_cv is not None and y_cv is not None:
                 h_cv = self.feedforward(X_cv)
                 logloss = self.logloss(X_cv, y_cv, h_cv)
+                # save CV accuracy for each epoch
+                self.cv_accuracy.append(logloss)
                 if logloss < self.min_loss:
                     self.min_loss = logloss
                     self.min_theta = self.thetas
@@ -86,14 +103,18 @@ class Network(object):
                 # if loss_rate is > alpha , set thetas and biases to best logloss values
                 # and exit function
                 if j > epochs / 10 and j > 300 and loss_rate > alpha:
-                    print("Stopping early, loss rate:", loss_rate, " | ", "Score:", self.min_loss)
+                    print("Stopping early, iter:", j, " |  loss rate:", loss_rate, " | ",
+                          "Score:", self.min_loss)
                     self.thetas = self.min_theta
-                    self.biases = self.biases
+                    self.biases = self.min_bias
                     return None
-            if not j % 10:
+            if not j % 10 and score:
                 h = self.feedforward(shuffled_X)
                 J = self.cost_function(shuffled_y, h, m, lmbda)
-                print("Epoch", j, " | ", "Cost:", J, " | ", "Logloss:", logloss)
+                print("Epoch", j, " | ", "Cost:", J, " | ", "CV Logloss:", logloss)
+        # regularise by using the min CV values
+        self.biases = self.min_bias
+        self.thetas = self.min_theta
 
     def update_mini_batch(self, X, y, eta, lmbda, m, mu):
         """
@@ -112,9 +133,9 @@ class Network(object):
 
         # update weights
         # update bias: b - gradient + momentum
-        self.biases = [b - (eta/len(X)) * (nb + mu * (b - nb)) for b, nb in zip(self.biases, nabla_b)]
+        self.biases = [b - (1 / len(X)) * (eta * nb - mu * (b - nb)) for b, nb in zip(self.biases, nabla_b)]
         # update theta: th - regularisation - gradient + momentum
-        self.thetas = [(1 - eta * (lmbda/m)) * t - (eta/len(X)) * (nt + mu * (t - nt))
+        self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta*nt - mu * (t - nt))
                        for t, nt in zip(self.thetas, nabla_t)]
 
     def backprop(self, X, y):
@@ -150,7 +171,7 @@ class Network(object):
         return nabla_b, nabla_t
 
     def cost_function(self, y, h, m, lmbda):
-        J = - 1 / m * np.sum(y * np.log(h) - (1 - y) * np.log(1 - h))
+        J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) - (1 - y) * np.log(1 - h)))
         R = 0
         for t in self.thetas:
             R += lmbda / (2 * m) * self.sumsqr(t)
@@ -177,3 +198,6 @@ class Network(object):
     def softmax(self, z):
         e = np.exp(z)
         return e / np.sum(e)
+
+    def logloss(self, X, y, h):
+        return - (1 / X.shape[0]) * np.sum(y * np.log(h))
