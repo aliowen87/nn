@@ -159,13 +159,15 @@ class Network(object):
         # feedforward
         activation = X
         activations.append(activation)
+        i = 0
         for b, t in zip(self.biases, self.thetas):
+            if i > 0 and p < 1:
+                activation = self.dropout(activation, p)
             z = np.dot(activation, t.T) + b
             z_list.append(z)
             activation = self.sigmoid(z)
-            # dropout
-            activation = self.dropout(activation, p)
             activations.append(activation)
+            i += 1
         # backprop
         delta = (activations[-1] - y)
         nabla_b[-1] = delta[0]
@@ -182,8 +184,7 @@ class Network(object):
         J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) - (1 - y) * np.log(1 - h)))
         R = 0
         for t in self.thetas:
-
-            R += lmbda / (2 * m) * self.sumsqr(t*p)
+            R += lmbda / (2 * m) * self.sumsqr(t * p)
         return J + R
 
     def sumsqr(self, a):
