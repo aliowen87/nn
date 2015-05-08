@@ -2,17 +2,6 @@ __author__ = 'alaso0'
 import numpy as np
 import scipy.stats as stats
 
-# Stochastic Gradient Descent
-# Minibatch (data shuffled before input to network)
-# How do I generalise to n-layers maintaining vectorisation
-# Look at the general form of backprop/feedforward.
-
-# List of layer sizes
-# Weights and biases are packed for storage
-# Unpacked for feedforward/backprop using knowledge of num layers and layer size
-# Use dictionary to store values e.g. Theta_n: array()
-
-
 class Network(object):
 
     def __init__(self, layers):
@@ -29,6 +18,11 @@ class Network(object):
         self.min_loss = 100
         # initialise weights
         self.init_weights()
+        # activation functions
+        self.activation_dict = {'sigmoid': self.sigmoid, 'sigmoid_prime': self.sigmoid_prime,
+                                'tanh': self.tanh, 'tanh_prime': self.tanh_prime, 'softmax': self.softmax}
+        self.hidden_activation = 'sigmoid'
+        self.output_activation = 'softmax'
 
     def init_weights(self):
         for i in range(self.num_layers - 1):
@@ -44,10 +38,13 @@ class Network(object):
         :param a: Inputs
         :return: Outputs
         """
-        for b, t in zip(self.biases, self.thetas):
+        for i, (b, t) in enumerate(zip(self.biases, self.thetas)):
             bias = b * p
             theta = t * p
-            a = self.sigmoid(np.dot(a, theta.T) + bias)
+            if i == len(self.biases):
+                a = self.activation_dict[self.output_activation](np.dot(a, theta.T) + bias)
+            else:
+                a = self.activation_dict[self.hidden_activation](np.dot(a, theta.T) + bias)
         return a
 
     def dropout(self, X, p):
@@ -60,9 +57,9 @@ class Network(object):
         # for each training examples
         # drop a unit (feature or hidden) depending on bernoulli.rvs(p)
         # r.shape = (1, 93)
-        r = np.zeros(X.shape)
-        for i in range(X.shape[0]):
-            r[i, :] = stats.bernoulli.rvs(p, size=(X.shape[1]))
+        r = stats.bernoulli.rvs(p, size=X.shape)
+        # for i in range(X.shape[0]):
+        #     r[i, :] = stats.bernoulli.rvs(p, size=(X.shape[1]))
         return X * r
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta, lmbda=0.0, alpha=0.1,
@@ -80,7 +77,8 @@ class Network(object):
         :param y_val: cross_validation labels
         :return:
         """
-        # TODO: Activation options
+        self.hidden_activation = hidden_activation
+        self.output_activation = output_activation
         m = X.shape[0]
         for j in range(epochs):
             Xy = np.hstack((X, y))
@@ -91,14 +89,18 @@ class Network(object):
             for k in range(0, m, mini_batch_size):
                 mini_X = shuffled_X[k:k+mini_batch_size, :]
                 mini_y = shuffled_y[k:k+mini_batch_size, :]
+                # tune momentum
+                if k < 25:
+                    mu = 0.5
                 self.update_mini_batch(mini_X, mini_y, eta, lmbda, m, mu, p)
             if score:
                 # save train accuracy for each epoch
                 h = self.feedforward(X, p)
-                self.train_accuracy.append(self.logloss(X, y, h))
+                J = self.cost_function(shuffled_y, h, m, lmbda, p)
+                self.train_accuracy.append(J)
             if X_cv is not None and y_cv is not None:
                 h_cv = self.feedforward(X_cv, p)
-                logloss = self.logloss(X_cv, y_cv, h_cv)
+                logloss = self.logloss(X_cv.shape[0], y_cv, h_cv)
                 # save CV accuracy for each epoch
                 self.cv_accuracy.append(logloss)
                 if logloss < self.min_loss:
@@ -108,15 +110,13 @@ class Network(object):
                 loss_rate = logloss / self.min_loss - 1
                 # if loss_rate is > alpha , set thetas and biases to best logloss values
                 # and exit function
-                if j > epochs / 10 and j > 300 and loss_rate > alpha:
+                if j > epochs / 5 and loss_rate > alpha:
                     print("Stopping early, iter:", j, " |  loss rate:", loss_rate, " | ",
                           "Score:", self.min_loss)
                     self.thetas = self.min_theta
                     self.biases = self.min_bias
                     return None
             if not j % 10 and score:
-                h = self.feedforward(shuffled_X, p)
-                J = self.cost_function(shuffled_y, h, m, lmbda, p)
                 print("Epoch", j, " | ", "Cost:", J, " | ", "CV Logloss:", logloss)
         # regularise by using the min CV values
         self.biases = self.min_bias
@@ -140,7 +140,7 @@ class Network(object):
         # update weights
         # update bias: b - gradient + momentum
         self.biases = [b - (1 / len(X)) * (eta * nb - mu * (b - nb)) for b, nb in zip(self.biases, nabla_b)]
-        # update theta: th - regularisation - gradient + momentum
+        # update theta: th - L2 regularisation - gradient + momentum
         self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta*nt - mu * (t - nt))
                        for t, nt in zip(self.thetas, nabla_t)]
 
@@ -159,13 +159,16 @@ class Network(object):
         # feedforward
         activation = X
         activations.append(activation)
-        i = 0
-        for b, t in zip(self.biases, self.thetas):
+        for i, (b, t) in enumerate(zip(self.biases, self.thetas)):
             if i > 0 and p < 1:
                 activation = self.dropout(activation, p)
             z = np.dot(activation, t.T) + b
             z_list.append(z)
-            activation = self.sigmoid(z)
+            if i == len(self.biases):
+                # output layer activation
+                activation = self.activation_dict[self.output_activation](z)
+            else:
+                activation = self.activation_dict[self.hidden_activation](z)
             activations.append(activation)
             i += 1
         # backprop
@@ -174,17 +177,20 @@ class Network(object):
         nabla_t[-1] = np.dot(delta.T, activations[-2])
         for l in range(2, self.num_layers):
             z = z_list[-l]
-            sigmoid_prime = self.sigmoid_prime(z)
-            delta = np.dot(delta, self.thetas[-l+1]) * sigmoid_prime
+            activation_prime = self.activation_dict[self.hidden_activation + '_prime'](z)
+            delta = np.dot(delta, self.thetas[-l+1]) * activation_prime
             nabla_b[-l] = delta.mean(axis=0)
             nabla_t[-l] = (np.dot(delta.T, activations[-l-1]))
         return nabla_b, nabla_t
 
     def cost_function(self, y, h, m, lmbda, p=1):
-        J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) - (1 - y) * np.log(1 - h)))
         R = 0
-        for t in self.thetas:
-            R += lmbda / (2 * m) * self.sumsqr(t * p)
+        if self.output_activation == 'softmax':
+            J = self.logloss(m, y, h)
+        else:
+            J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) - (1 - y) * np.log(1 - h)))
+            for t in self.thetas:
+                R += lmbda / (2 * m) * self.sumsqr(t * p)
         return J + R
 
     def sumsqr(self, a):
@@ -209,5 +215,5 @@ class Network(object):
         e = np.exp(z)
         return e / np.sum(e)
 
-    def logloss(self, X, y, h):
-        return - (1 / X.shape[0]) * np.sum(y * np.log(h))
+    def logloss(self, m, y, h):
+        return - (1 / m) * np.sum(y * np.log(h))

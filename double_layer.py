@@ -2,9 +2,6 @@ __author__ = 'aliowen'
 import numpy as np
 from scipy import optimize, stats
 
-# TODO: Gradient checking function
-# TODO: Take Otto test code into a separate .py
-
 class EarlyStop(Exception):
     pass
 
@@ -141,10 +138,9 @@ class NN():
         return a1, z2, a2, z3, a3, z4, a4
 
     def cost_function(self, thetas, input_layer, hidden_layer, hidden_layer_2, output_layer,
-                      X, y, reg_lambda):
+                      X, Y, reg_lambda):
         t1, t2, t3 = self.unpack_thetas(thetas, input_layer, hidden_layer, hidden_layer_2, output_layer)
         m = X.shape[0]
-        Y = np.eye(output_layer)[y.astype(int)].reshape(y.shape[0], output_layer)
 
         _, _, _, _, _, _, h = self.feed_forward(X, t1, t2, t3)
         # cost function
@@ -163,7 +159,7 @@ class NN():
         return J
 
     def gradient(self, thetas, input_layer, hidden_layer, hidden_layer_2, output_layer,
-                 X, y, reg_lambda):
+                 X, Y, reg_lambda):
         """
         Backprop implementation that returns the gradient of the current weights based on the output
         of the feedforward function
@@ -183,9 +179,6 @@ class NN():
         t1_flat = t1[:, 1:]
         t2_flat = t2[:, 1:]
         t3_flat = t3[:, 1:]
-        y = y.astype(int)
-        Y = np.eye(output_layer)[y]
-        Y = Y.reshape(y.shape[0], output_layer)
 
         # vectorised implementation
         a1, z2, a2, z3, a3, z4, a4 = self.feed_forward(X, t1, t2, t3)
@@ -219,7 +212,7 @@ class NN():
         :return: None, updates class variables for weights (t1, t2, t3)
         """
         input_layer = X.shape[1]
-        output_layer = len(set(y))
+        output_layer = y.shape[1]
 
         theta1_0 = self.rand_init(input_layer, self.hidden_layer)
         theta2_0 = self.rand_init(self.hidden_layer, self.hidden_layer_2)
@@ -238,12 +231,11 @@ class NN():
             else:
                 self.iters += 1
                 input_layer = X.shape[1]
-                output_layer = len(set(y))
+                output_layer = y.shape[1]
                 t1, t2, t3 = self.unpack_thetas(thetas, input_layer, self.hidden_layer, self.hidden_layer_2,
                                                  output_layer)
                 _,_,_,_,_,_,test_results = self.feed_forward(X_cv, t1, t2, t3)
-                Y = np.eye(len(set(y)))[y_cv]
-                logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
+                logloss = - (1 / X_cv.shape[0]) * np.sum(y_cv.T * np.log(test_results))
                 if logloss < self.min_loss:
                     self.min_loss = logloss
                     self.t1, self.t2, self.t3 = t1, t2, t3
@@ -266,7 +258,7 @@ class NN():
 
     def sgd(self, X, y, X_cv=None, y_cv=None, mini_batch=200):
         self.input_layer = X.shape[1]
-        self.output_layer = len(set(y))
+        self.output_layer = y.shape[1]
         # Y = np.eye(self.output_layer)[y]
         m = X.shape[0]
         # initialise thetas
@@ -307,7 +299,7 @@ class NN():
         :return: Error between numerical gradient and grad function
         """
         input_layer = X.shape[1]
-        output_layer = len(set(y))
+        output_layer = y.shape[1]
 
         theta1_0 = self.rand_init(input_layer, self.hidden_layer)
         theta2_0 = self.rand_init(self.hidden_layer, self.hidden_layer_2)
@@ -321,18 +313,20 @@ class NN():
         return error
 
     def predict(self, X):
-        return self.predict_proba(X).argmax(0)
-
-    def predict_proba(self, X):
         _, _, _, _, _, _, h = self.feed_forward(X, self.t1, self.t2, self.t3)
         return h
 
 
 # testing
 
-from sklearn import cross_validation
-
+import numpy as np
 import pandas as pd
+
+# testing
+from sklearn import cross_validation
+from sklearn.decomposition import PCA
+# np.random.seed(seed=15)
+
 train = pd.read_csv('../otto/train.csv')
 np.random.shuffle(np.array(train))
 test = pd.read_csv('../otto/test.csv')
@@ -342,24 +336,28 @@ X_scaled = (X - X.mean()) / X.std()
 y = train.iloc[:, 94]
 # convert labels into integers
 int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
+# turn into label matrix
+Y = np.eye(len(set(y)))[int_y]
 # CV split
-X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, int_y, test_size=0.2)
-nn = NN(hidden_layer=50, hidden_layer_2=50, maxiter=1000, reg_lambda=2, alpha=0.2, activation='tanh',
-        eta=2)
-nn.sgd(X_train, y_train)
-# try:
-#     nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=5000, reg_lambda=8, alpha=0.2, activation='tanh')
-#     nn.fit(X_train, y_train, X_cv, y_cv)
-# except EarlyStop:
-#     pass
+X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, Y, test_size=0.2)
+# PCA
+pca = PCA(n_components=75)
+X_pca_45 = pca.fit_transform(X_scaled)
+# CV split
+X_train_pca, X_cv_pca, y_train_pca, y_cv_pca = cross_validation.train_test_split(
+    X_pca_45, Y, test_size=0.2)
+try:
+    nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=500, reg_lambda=5, alpha=0.05, activation='tanh')
+    nn.fit(X_train_pca, y_train_pca, X_cv_pca, y_cv_pca)
+except EarlyStop:
+    pass
+
 _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
-Y = np.eye(len(set(y)))[y_cv]
-logloss = - (1 / X_cv.shape[0]) * np.sum(Y.T * np.log(test_results))
+logloss = - (1 / X_cv.shape[0]) * np.sum(y_cv_pca.T * np.log(test_results))
 print("Score=", logloss)
 print("hidden layer size=", nn.hidden_layer)
 print("hidden layer 2 size=", nn.hidden_layer_2)
 print("Lambda=", nn.reg_lambda)
-
 
 # test data
 X_test = test.iloc[:, 1:94]
