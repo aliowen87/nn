@@ -1,6 +1,7 @@
 __author__ = 'alaso0'
 import numpy as np
 import scipy.stats as stats
+import scipy.optimize as optimize
 
 class Network(object):
 
@@ -23,6 +24,9 @@ class Network(object):
                                 'tanh': self.tanh, 'tanh_prime': self.tanh_prime, 'softmax': self.softmax}
         self.hidden_activation = 'sigmoid'
         self.output_activation = 'softmax'
+        # rmsprop
+        self.rmsprop_theta = list()
+        self.rmsprop_bias = list()
 
     def init_weights(self):
         for i in range(self.num_layers - 1):
@@ -96,7 +100,7 @@ class Network(object):
             if score:
                 # save train accuracy for each epoch
                 h = self.feedforward(X, p)
-                J = self.cost_function(shuffled_y, h, m, lmbda, p)
+                J = self.cost_function(y, h, m, lmbda, p)
                 self.train_accuracy.append(J)
             if X_cv is not None and y_cv is not None:
                 h_cv = self.feedforward(X_cv, p)
@@ -137,11 +141,18 @@ class Network(object):
         # get gradients using backprop
         nabla_b, nabla_t = self.backprop(X, y, p)
 
-        # update weights
-        # update bias: b - gradient + momentum
+        # # update weights
+        # # update bias: b - gradient + momentum
+        # self.biases = [b - (1 / len(X)) * (eta * nb - mu * (b - nb)) for b, nb in zip(self.biases, nabla_b)]
+        # # update theta: th - L2 regularisation - gradient + momentum
+        # self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta * nt - mu * (t - nt))
+        #                for t, nt in zip(self.thetas, nabla_t)]
+
+        # Nesterov accelerated gradient
+        # update biases
         self.biases = [b - (1 / len(X)) * (eta * nb - mu * (b - nb)) for b, nb in zip(self.biases, nabla_b)]
-        # update theta: th - L2 regularisation - gradient + momentum
-        self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta*nt - mu * (t - nt))
+        # update weights
+        self.thetas = [(1 - eta * (lmbda/m)) * t - (1 / len(X)) * (eta * nt - mu * (t - nt))
                        for t, nt in zip(self.thetas, nabla_t)]
 
     def backprop(self, X, y, p=1):
@@ -217,3 +228,19 @@ class Network(object):
 
     def logloss(self, m, y, h):
         return - (1 / m) * np.sum(y * np.log(h))
+
+    def check_gradient(self, X, y):
+        """
+        Gradient checking (troubleshooting function)
+        :param X: Training set
+        :param y: Training targets
+        :return: Error between numerical gradient and grad function
+        """
+        
+        # initialise weights
+        self.init_weights()
+
+        error = optimize.check_grad(self.cost_function, self.backprop, self.thetas, X, y,
+                                    epsilon=10**-4)
+        print('Error=', error)
+        return error

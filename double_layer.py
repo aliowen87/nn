@@ -319,60 +319,60 @@ class NN():
 
 # testing
 
-import numpy as np
-import pandas as pd
+# import numpy as np
+# import pandas as pd
 
 # testing
-from sklearn import cross_validation
-from sklearn.decomposition import PCA
+# from sklearn import cross_validation
+# from sklearn.decomposition import PCA
 # np.random.seed(seed=15)
-
-train = pd.read_csv('../otto/train.csv')
-np.random.shuffle(np.array(train))
-test = pd.read_csv('../otto/test.csv')
-X = train.iloc[:, 1:94]
+# 
+# train = pd.read_csv('../otto/train.csv')
+# np.random.shuffle(np.array(train))
+# test = pd.read_csv('../otto/test.csv')
+# X = train.iloc[:, 1:94]
 # attempt to scale X features to its Z-value
-X_scaled = (X - X.mean()) / X.std()
-y = train.iloc[:, 94]
+# X_scaled = (X - X.mean()) / X.std()
+# y = train.iloc[:, 94]
 # convert labels into integers
-int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
+# int_y = np.array([int(q[-1]) - 1 for i, q in enumerate(y)])
 # turn into label matrix
-Y = np.eye(len(set(y)))[int_y]
+# Y = np.eye(len(set(y)))[int_y]
 # CV split
-X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, Y, test_size=0.2)
+# X_train, X_cv, y_train, y_cv = cross_validation.train_test_split(X_scaled, Y, test_size=0.2)
 # PCA
-pca = PCA(n_components=75)
-X_pca_45 = pca.fit_transform(X_scaled)
+# pca = PCA(n_components=75)
+# X_pca_45 = pca.fit_transform(X_scaled)
 # CV split
-X_train_pca, X_cv_pca, y_train_pca, y_cv_pca = cross_validation.train_test_split(
-    X_pca_45, Y, test_size=0.2)
-try:
-    nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=500, reg_lambda=5, alpha=0.05, activation='tanh')
-    nn.fit(X_train_pca, y_train_pca, X_cv_pca, y_cv_pca)
-except EarlyStop:
-    pass
-
-_,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
-logloss = - (1 / X_cv.shape[0]) * np.sum(y_cv_pca.T * np.log(test_results))
-print("Score=", logloss)
-print("hidden layer size=", nn.hidden_layer)
-print("hidden layer 2 size=", nn.hidden_layer_2)
-print("Lambda=", nn.reg_lambda)
-
-# test data
-X_test = test.iloc[:, 1:94]
-X_test = (X_test - X_test.mean()) / X_test.std()
-_,_,_,_,_,_, results = nn.feed_forward(X_test, nn.t1, nn.t2, nn.t3)
-# add id back into results
-id = np.array(range(X_test.shape[0])) + 1
-results = results.T
-results_dict = dict()
-results_dict['id'] = id
-for i in range(len(set(y))):
-    results_dict['Class_' + str(i+1)] = results[:, i]
-
-
-def write_results(results_dict):
-    results_df = pd.DataFrame.from_dict(results_dict)
-    results_df['id'] = results_df['id'].astype('int32')
-    results_df.to_csv('../otto/results.csv', index=False)
+# X_train_pca, X_cv_pca, y_train_pca, y_cv_pca = cross_validation.train_test_split(
+#     X_pca_45, Y, test_size=0.2)
+# try:
+#     nn = NN(hidden_layer=300, hidden_layer_2=150, maxiter=500, reg_lambda=5, alpha=0.05, activation='tanh')
+#     nn.fit(X_train_pca, y_train_pca, X_cv_pca, y_cv_pca)
+# except EarlyStop:
+#     pass
+# 
+# _,_,_,_,_,_,test_results = nn.feed_forward(X_cv, nn.t1, nn.t2, nn.t3)
+# logloss = - (1 / X_cv.shape[0]) * np.sum(y_cv_pca.T * np.log(test_results))
+# print("Score=", logloss)
+# print("hidden layer size=", nn.hidden_layer)
+# print("hidden layer 2 size=", nn.hidden_layer_2)
+# print("Lambda=", nn.reg_lambda)
+# 
+# # test data
+# X_test = test.iloc[:, 1:94]
+# X_test = (X_test - X_test.mean()) / X_test.std()
+# _,_,_,_,_,_, results = nn.feed_forward(X_test, nn.t1, nn.t2, nn.t3)
+# # add id back into results
+# id = np.array(range(X_test.shape[0])) + 1
+# results = results.T
+# results_dict = dict()
+# results_dict['id'] = id
+# for i in range(len(set(y))):
+#     results_dict['Class_' + str(i+1)] = results[:, i]
+# 
+# 
+# def write_results(results_dict):
+#     results_df = pd.DataFrame.from_dict(results_dict)
+#     results_df['id'] = results_df['id'].astype('int32')
+#     results_df.to_csv('../otto/results.csv', index=False)
