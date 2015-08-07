@@ -97,17 +97,83 @@ class Network(object):
 
             self.layers[-i].nablab = delta.mean(axis=0)
             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
-        # weights and bias are updated in place, so nothing to return
-        return None
 
-    def stochastic_gradient_descent(self):
-        pass
+    def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=1.0,
+                                    Xval=None, yval=None):
+        # TODO: Finish spec
+        """
+        Stochastic gradient descent...
+        :param X: Training examples in the form M X N
+        :param y: Training labels in the from C * I
+        :param epochs: Number of epochs to train
+        :param mini_batch_size: Mini batch size
+        :param eta: Learning rate
+        :param lambda_: L2 regularisation parameter
+        :return:
+        """
+        # save number of training examples
+        m = X.shape[0]
 
-    def update_mini_batch(self):
-        pass
+        # primary descent loop
+        for j in range(epochs):
+            # combine training samples and labels for minibatch sampling
+            Xy = np.hstack((X,y))
+            np.random.shuffle(Xy)
+            # Split back into examples and labels
+            X_shuffled = Xy[:, :X.shape[1]]
+            y_shuffled = Xy[:, -y.shape[1]:]
 
-    def cost_function(self):
-        pass
+            # minibatch loop
+            for k in range(0, m, mini_batch_size):
+                # slice minibatches
+                mini_X = X_shuffled[k:k+mini_batch_size, :]
+                mini_y = y_shuffled[k:k+mini_batch_size, :]
+                # perform update
+                self.update_mini_batch(mini_X, mini_y, eta, lambda_, m)
+
+            # Get the validation cost
+            val_activations, _ = self.feedforward(Xval)
+            val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
+
+            # Get the cost and print out every 10 epochs
+            if j % 10 == 0:
+                activations, _ = self.feedforward(X)
+                cost = self.cost_function(y, activations[-1], m, lambda_)
+                print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (j, cost, val_cost))
+
+
+
+    def update_mini_batch(self, X, y, eta, lambda_, m):
+        """
+        Update weights and bias based on minibatch
+        :param X: Minibatch of training examples
+        :param y: Minibatch of training labels
+        :param eta: learning rate
+        :param lambda_: L2 regularisation parameter
+        :return: None
+        """
+        # update gradients with backprop
+        self.backprop(X, y)
+
+        # update weights and bias with simple gradient descent
+        for l in self.layers:
+            l.bias -= 1 / m * eta * l.nablab
+            l.weights -= 1 / m * eta * (l.nablaw - lambda_ * l.weights)
+
+
+    def cost_function(self, y, h, m, lambda_):
+        """
+        Logloss cost function
+        :return:
+        """
+        J = - 1 / m * np.sum(y * np.log(h) - (1 - y) * np.log(1 - h))
+        # TODO: L2 regularisation
+        for l in self.layers:
+            J += lambda_  / (2 * m) * self.sumsqr(l.weights)
+        return J
+
+    def sumsqr(self, x):
+        return np.sum(x ** 2)
 
     def sigmoid(self, z):
         """
@@ -133,3 +199,22 @@ class Network(object):
         :return:
         """
         return z * (z > 0)
+
+    def gradient_check(self, X, y, eps=1e-5):
+        m = X.shape[0]
+        lambda_ = 0.0
+        for i, l in enumerate(self.layers):
+            self.backprop(X, y)
+            weights = l.weights
+            plus = weights + eps
+            l.weights = plus
+            actplus, _ = self.feedforward(X)
+            costplus = self.cost_function(y, actplus[-1], m, lambda_)
+            minus = weights - eps
+            l.weights = minus
+            actminus, _ = self.feedforward(X)
+            costminus = self.cost_function(y, actminus[-1], m, lambda_)
+            grad = (costplus - costminus) / (2 * eps)
+            difference = (np.sum(weights) - grad) / (np.sum(weights) + grad)
+            print("Difference for Layer %d: %.6f" %(i, difference))
+
