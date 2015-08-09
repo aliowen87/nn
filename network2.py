@@ -13,6 +13,8 @@ class Layer(object):
         self.bias = np.random.randn(self.outer, 1).T
         self.nablaw = np.zeros(self.weights.shape)
         self.nablab = np.zeros(self.bias.shape)
+        # Velocity for momentum
+        self.velocity = 0.0
 
 
 class Network(object):
@@ -72,7 +74,7 @@ class Network(object):
     def feedforward(self, X):
         activations = list()
         zs = list()
-        activation  = X
+        activation = X
         for l in self.layers:
             z = np.dot(activation, l.weights.T) + l.bias
             # save z for backprop
@@ -99,8 +101,7 @@ class Network(object):
             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=1.0,
-                                    Xval=None, yval=None):
-        # TODO: Finish spec
+                                    Xval=None, yval=None, momentum="Nesterov"):
         """
         Stochastic gradient descent...
         :param X: Training examples in the form M X N
@@ -111,11 +112,15 @@ class Network(object):
         :param lambda_: L2 regularisation parameter
         :return:
         """
+        # TODO: Finish spec
         # save number of training examples
         m = X.shape[0]
 
         # primary descent loop
         for j in range(epochs):
+            # annealing
+            if j > 0 and j % 5 == 0:
+                eta *= 0.9
             # combine training samples and labels for minibatch sampling
             Xy = np.hstack((X,y))
             np.random.shuffle(Xy)
@@ -129,11 +134,14 @@ class Network(object):
                 mini_X = X_shuffled[k:k+mini_batch_size, :]
                 mini_y = y_shuffled[k:k+mini_batch_size, :]
                 # perform update
-                self.update_mini_batch(mini_X, mini_y, eta, lambda_, m)
+                self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum)
 
             # Get the validation cost
-            val_activations, _ = self.feedforward(Xval)
-            val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
+            if Xval != None and yval != None:
+                val_activations, _ = self.feedforward(Xval)
+                val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
+            else:
+                val_cost = 1.0
 
             # Get the cost and print out every 10 epochs
             if j % 10 == 0:
@@ -142,8 +150,7 @@ class Network(object):
                 print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (j, cost, val_cost))
 
 
-
-    def update_mini_batch(self, X, y, eta, lambda_, m):
+    def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov"):
         """
         Update weights and bias based on minibatch
         :param X: Minibatch of training examples
@@ -152,19 +159,38 @@ class Network(object):
         :param lambda_: L2 regularisation parameter
         :return: None
         """
+        # TODO: How do I differentiate between different update strategies, e.g. Momentum, NAG, RMSPROP
         # update gradients with backprop
         self.backprop(X, y)
 
+        # Momentum
+        if momentum == "classic":
+            for l in self.layers:
+                l.bias -= 1 / m * eta * l.nablab
+                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw + lambda_ * l.weights)
+                l.weights += l.velocity
+            return None
+
+        # Nesterov
+        if momentum == "nesterov":
+            for l in self.layers:
+                l.bias -= 1 / m * eta * l.nablab
+                vel_prev = l.velocity
+                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw + lambda_ * l.weights)
+                l.weights += - mu * vel_prev + (1 + mu) * l.velocity
+            return None
+
+        # default update
         # update weights and bias with simple gradient descent
         for l in self.layers:
             l.bias -= 1 / m * eta * l.nablab
-            l.weights -= 1 / m * eta * (l.nablaw - lambda_ * l.weights)
+            l.weights -= eta * (1 / m * l.nablaw + lambda_ * l.weights)
 
 
     def cost_function(self, y, h, m, lambda_):
         """
         Logloss cost function
-        :return:
+        :return: Logloss cost
         """
         J = - 1 / m * np.sum(y * np.log(h) - (1 - y) * np.log(1 - h))
         # TODO: L2 regularisation
@@ -201,11 +227,20 @@ class Network(object):
         return z * (z > 0)
 
     def gradient_check(self, X, y, eps=1e-5):
-        m = X.shape[0]
+        # run gradient function for a few epochs
+        epochs = 30
+        mini_batch_size = 50
         lambda_ = 0.0
+        self.stochastic_gradient_descent(X, y, epochs, mini_batch_size, lambda_=lambda_)
+        m = X.shape[0]
+
         for i, l in enumerate(self.layers):
-            self.backprop(X, y)
+            # For gradient checking I need to take each element of the gradient
+            # and compare it to the numerical gradient calculated by G(W(i) + eps)) - G(W(i) - eps)) / 2*eps
+            # Looks like previously I was comparing tht weights rather than gradW, which is obvs wrong
+            # Diff should be ~< eps
             weights = l.weights
+            gradients = l.nablaw
             plus = weights + eps
             l.weights = plus
             actplus, _ = self.feedforward(X)
@@ -215,6 +250,6 @@ class Network(object):
             actminus, _ = self.feedforward(X)
             costminus = self.cost_function(y, actminus[-1], m, lambda_)
             grad = (costplus - costminus) / (2 * eps)
-            difference = (np.sum(weights) - grad) / (np.sum(weights) + grad)
+            difference = (np.sum(gradients) - grad) / (np.sum(gradients) + grad)
             print("Difference for Layer %d: %.6f" %(i, difference))
 
