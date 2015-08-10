@@ -15,6 +15,11 @@ class Layer(object):
         self.nablab = np.zeros(self.bias.shape)
         # Velocity for momentum
         self.velocity = 0.0
+        # early stopping weights/bias
+        self.best_weights = np.zeros(self.weights.shape)
+        self.best_bias = np.zeros(self.bias.shape)
+        #RMS/Adaprop cache varible
+        self.cache = np.zeros(self.weights.shape)
 
 
 class Network(object):
@@ -25,6 +30,10 @@ class Network(object):
         # initialise layers
         self.layers = [Layer(l, layers[i+1], self.sigmoid)
                        for i, l in enumerate(layers[:-1])]
+        # variables for storing errors
+        self.train_error = list()
+        self.val_error = list()
+        self.min_val_err = 100.0
 
     # def dropout(self, layer, p=1.0):
     #     """
@@ -61,9 +70,9 @@ class Network(object):
         mean = train.mean()
         std = train.std()
         train_scaled = (train - mean) / std
-        if val:
+        if val is not None:
             val = (val - mean) / std
-        if test:
+        if test is not None:
             test = (test - mean) / std
         return train_scaled, val, test
 
@@ -101,7 +110,7 @@ class Network(object):
             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=1.0,
-                                    Xval=None, yval=None, momentum="Nesterov"):
+                                    Xval=None, yval=None, momentum="nesterov", alpha=0.1):
         """
         Stochastic gradient descent...
         :param X: Training examples in the form M X N
@@ -110,7 +119,8 @@ class Network(object):
         :param mini_batch_size: Mini batch size
         :param eta: Learning rate
         :param lambda_: L2 regularisation parameter
-        :return:
+        :param momentum: Type of momentum to employ, default is 'nesterov'
+        :return: None, class variables updated in-place
         """
         # TODO: Finish spec
         # save number of training examples
@@ -119,8 +129,12 @@ class Network(object):
         # primary descent loop
         for j in range(epochs):
             # annealing
-            if j > 0 and j % 5 == 0:
-                eta *= 0.9
+            # if j > 0 and j % 5 == 0:
+            #     eta *= 0.9
+            # reset velocity
+            for l in self.layers:
+                l.velocity = 0.0
+
             # combine training samples and labels for minibatch sampling
             Xy = np.hstack((X,y))
             np.random.shuffle(Xy)
@@ -137,26 +151,51 @@ class Network(object):
                 self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum)
 
             # Get the validation cost
-            if Xval != None and yval != None:
+            if Xval is not None and yval is not None:
                 val_activations, _ = self.feedforward(Xval)
                 val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
+                self.val_error.append(val_cost)
+
+                # early stopping regularisation, calculate loss rate
+                loss_rate = val_cost / self.min_val_err - 1
+
+                # save best network weights and bias
+                if val_cost < self.min_val_err:
+                    self.min_val_err = val_cost
+                    for l in self.layers:
+                        l.best_weights = l.weights
+                        l.best_bias = l.bias
+
+                if j > 10 and loss_rate > alpha:
+                    print("Stopping early, epoch %d \t loss rate: %3.f \t Val Error: %.6f"
+                          % (j, loss_rate, self.min_val_err))
+                    for l in self.layers:
+                        l.weights = l.best_weights
+                        l.bias = l.best_bias
+                    # exit function
+                    return None
             else:
                 val_cost = 1.0
 
+            # get the training error
+            activations, _ = self.feedforward(X)
+            cost = self.cost_function(y, activations[-1], m, lambda_)
+            self.train_error.append(cost)
+
             # Get the cost and print out every 10 epochs
             if j % 10 == 0:
-                activations, _ = self.feedforward(X)
-                cost = self.cost_function(y, activations[-1], m, lambda_)
                 print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (j, cost, val_cost))
 
 
-    def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov"):
+    def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov",
+                          decay=0.99):
         """
         Update weights and bias based on minibatch
         :param X: Minibatch of training examples
         :param y: Minibatch of training labels
         :param eta: learning rate
         :param lambda_: L2 regularisation parameter
+        :param decay: RMSProp decay hyperparameter
         :return: None
         """
         # TODO: How do I differentiate between different update strategies, e.g. Momentum, NAG, RMSPROP
@@ -180,6 +219,15 @@ class Network(object):
                 l.weights += - mu * vel_prev + (1 + mu) * l.velocity
             return None
 
+        # RMSProp c.f. Hinton
+        # cache = decay * cache + (1 - decay) * grad ** 2
+        # weights += - eta * grad / np.sqrt(cache + 1e-8)
+        if momentum == 'rmsprop':
+            for l in self.layers:
+                l.cache = decay * l.cache + (1 - decay) * l.nablaw ** 2
+                l.weights -= (eta * l.nablaw) / np.sqrt(l.cache + 1e-8)
+            return None
+
         # default update
         # update weights and bias with simple gradient descent
         for l in self.layers:
@@ -193,6 +241,7 @@ class Network(object):
         :return: Logloss cost
         """
         J = - 1 / m * np.sum(y * np.log(h) - (1 - y) * np.log(1 - h))
+        J = np.sqrt(J**2)
         # TODO: L2 regularisation
         for l in self.layers:
             J += lambda_  / (2 * m) * self.sumsqr(l.weights)
@@ -252,4 +301,5 @@ class Network(object):
             grad = (costplus - costminus) / (2 * eps)
             difference = (np.sum(gradients) - grad) / (np.sum(gradients) + grad)
             print("Difference for Layer %d: %.6f" %(i, difference))
+
 
