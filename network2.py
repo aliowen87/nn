@@ -18,7 +18,7 @@ class Layer(object):
         # early stopping weights/bias
         self.best_weights = np.zeros(self.weights.shape)
         self.best_bias = np.zeros(self.bias.shape)
-        #RMS/Adaprop cache varible
+        #RMS/Adaprop cache variable
         self.cache = np.zeros(self.weights.shape)
 
 
@@ -27,8 +27,18 @@ class Network(object):
     def __init__(self, layers, seed=42):
         # seed random number generator
         np.random.seed(seed)
+
+        # dictionary of activation functions
+        self.activation_functions = {
+            'sigmoid': self.sigmoid,
+            'sigmoid_prime': self.sigmoid_prime,
+            'relu': self.reLU,
+            'relu_prime': self.reLU_prime
+        }
+
         # initialise layers
-        self.layers = [Layer(l, layers[i+1], self.sigmoid)
+        # TODO: Structure for choosing layer type and activation
+        self.layers = [Layer(l, layers[i+1], 'sigmoid')
                        for i, l in enumerate(layers[:-1])]
         # variables for storing errors
         self.train_error = list()
@@ -88,7 +98,7 @@ class Network(object):
             z = np.dot(activation, l.weights.T) + l.bias
             # save z for backprop
             zs.append(z)
-            activation = l.activation(z)
+            activation = self.activation_functions[l.activation](z)
             # save activation for backprop
             activations.append(activation)
         return activations, zs
@@ -103,7 +113,7 @@ class Network(object):
         self.layers[-1].nablaw = np.dot(delta.T, A[-2])
         for i in range(2, len(self.layers)):
             z = Z[-i]
-            activation_prime = self.sigmoid_prime(z)
+            activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
             delta = np.dot(delta, self.layers[-i+1].weights) * activation_prime
 
             self.layers[-i].nablab = delta.mean(axis=0)
@@ -157,7 +167,7 @@ class Network(object):
                 self.val_error.append(val_cost)
 
                 # early stopping regularisation, calculate loss rate
-                loss_rate = val_cost / self.min_val_err - 1
+                loss_rate = float(val_cost / self.min_val_err - 1)
 
                 # save best network weights and bias
                 if val_cost < self.min_val_err:
@@ -167,7 +177,7 @@ class Network(object):
                         l.best_bias = l.bias
 
                 if j > 10 and loss_rate > alpha:
-                    print("Stopping early, epoch %d \t loss rate: %3.f \t Val Error: %.6f"
+                    print("Stopping early, epoch %d \t loss rate: %.3f \t Val Error: %.6f"
                           % (j, loss_rate, self.min_val_err))
                     for l in self.layers:
                         l.weights = l.best_weights
@@ -260,9 +270,9 @@ class Network(object):
 
     def sigmoid_prime(self, z):
         """
-        Computes sigmoid gradient of numpy array
+        Computes sigmoid gradient of numpy array of the form sigmoid(z) * (1 - sigmoid(z))
         :param z: Numpy array of the form activation - y/ grad.T.activation[-1] etc
-        :return: Sigmoid gradient
+        :return: Sigmoid gradient (numpy array)
         """
         y = self.sigmoid(z)
         return y * (1 - y)
@@ -275,6 +285,14 @@ class Network(object):
         """
         return z * (z > 0)
 
+    def reLU_prime(self, z):
+        """
+        Computes ReLU gradient of numpy array, 1 if z(i) > 0
+        :param z: Numpy array of the form activation - y/ grad.T.activation[-1] etc
+        :return: ReLU gradient (numpy array)
+        """
+        return 1 * (z > 0)
+
     def gradient_check(self, X, y, eps=1e-5):
         # run gradient function for a few epochs
         epochs = 30
@@ -284,6 +302,7 @@ class Network(object):
         m = X.shape[0]
 
         for i, l in enumerate(self.layers):
+            # TODO: Complete gradient check code
             # For gradient checking I need to take each element of the gradient
             # and compare it to the numerical gradient calculated by G(W(i) + eps)) - G(W(i) - eps)) / 2*eps
             # Looks like previously I was comparing tht weights rather than gradW, which is obvs wrong
