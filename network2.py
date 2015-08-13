@@ -25,6 +25,11 @@ class Layer(object):
 class Network(object):
 
     def __init__(self, layers, seed=42):
+        """
+        :param layers: list of tuples of the form (layer_size, activation type) e.g. (200, 'relu')
+        :param seed: seed random number generator
+        """
+
         # seed random number generator
         np.random.seed(seed)
 
@@ -37,24 +42,12 @@ class Network(object):
         }
 
         # initialise layers
-        # TODO: Structure for choosing layer type and activation
-        self.layers = [Layer(l, layers[i+1], 'sigmoid')
+        self.layers = [Layer(l[0], layers[i+1][0], l[1])
                        for i, l in enumerate(layers[:-1])]
         # variables for storing errors
         self.train_error = list()
         self.val_error = list()
         self.min_val_err = 100.0
-
-    # def dropout(self, layer, p=1.0):
-    #     """
-    #     Takes an activated layer during forward prop and applies a mask to increase sparsity
-    #     of the layer using probability p. Returns dropped-out layer
-    #     :param layer: activated layer
-    #     :param p: dropout probability i.e. sparsity of outputted layer
-    #     :return: dropped layer
-    #     """
-    #     mask = np.random.rand(*layer.shape) < p
-    #     return layer * mask
 
     def inverted_dropout(self, layer, p=1.0):
         """
@@ -90,7 +83,8 @@ class Network(object):
     def pca_whiten(self):
         pass
 
-    def feedforward(self, X):
+
+    def feedforward(self, X, p=1.0):
         activations = list()
         zs = list()
         activation = X
@@ -99,13 +93,17 @@ class Network(object):
             # save z for backprop
             zs.append(z)
             activation = self.activation_functions[l.activation](z)
+            # dropout
+            if p < 1.0:
+                activation = self.inverted_dropout(activation, p=p)
             # save activation for backprop
             activations.append(activation)
         return activations, zs
 
-    def backprop(self, X, y):
+
+    def backprop(self, X, y, p=1.0):
         # get activations
-        A, Z = self.feedforward(X)
+        A, Z = self.feedforward(X, p=p)
 
         # start backprop
         delta = (A[-1] - y)
@@ -119,8 +117,9 @@ class Network(object):
             self.layers[-i].nablab = delta.mean(axis=0)
             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
 
+
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=1.0,
-                                    Xval=None, yval=None, momentum="nesterov", alpha=0.1):
+                                    Xval=None, yval=None, momentum="nesterov", alpha=0.1, p=1):
         """
         Stochastic gradient descent...
         :param X: Training examples in the form M X N
@@ -158,7 +157,7 @@ class Network(object):
                 mini_X = X_shuffled[k:k+mini_batch_size, :]
                 mini_y = y_shuffled[k:k+mini_batch_size, :]
                 # perform update
-                self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum)
+                self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum, p=p)
 
             # Get the validation cost
             if Xval is not None and yval is not None:
@@ -198,7 +197,7 @@ class Network(object):
 
 
     def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov",
-                          decay=0.99):
+                          decay=0.99, p=1.0):
         """
         Update weights and bias based on minibatch
         :param X: Minibatch of training examples
@@ -210,13 +209,13 @@ class Network(object):
         """
         # TODO: How do I differentiate between different update strategies, e.g. Momentum, NAG, RMSPROP
         # update gradients with backprop
-        self.backprop(X, y)
+        self.backprop(X, y, p=p)
 
         # Momentum
         if momentum == "classic":
             for l in self.layers:
                 l.bias -= 1 / m * eta * l.nablab
-                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw + lambda_ * l.weights)
+                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
                 l.weights += l.velocity
             return None
 
@@ -225,7 +224,7 @@ class Network(object):
             for l in self.layers:
                 l.bias -= 1 / m * eta * l.nablab
                 vel_prev = l.velocity
-                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw + lambda_ * l.weights)
+                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
                 l.weights += - mu * vel_prev + (1 + mu) * l.velocity
             return None
 
@@ -242,7 +241,7 @@ class Network(object):
         # update weights and bias with simple gradient descent
         for l in self.layers:
             l.bias -= 1 / m * eta * l.nablab
-            l.weights -= eta * (1 / m * l.nablaw + lambda_ * l.weights)
+            l.weights -= eta * (1 / m * l.nablaw - lambda_ * l.weights)
 
 
     def cost_function(self, y, h, m, lambda_):
@@ -250,15 +249,15 @@ class Network(object):
         Logloss cost function
         :return: Logloss cost
         """
-        J = - 1 / m * np.sum(y * np.log(h) - (1 - y) * np.log(1 - h))
-        J = np.sqrt(J**2)
-        # TODO: L2 regularisation
+        J = - 1 / m * np.sum(y * np.log(h) + (1 - y) * np.log(1 - h))
+
         for l in self.layers:
             J += lambda_  / (2 * m) * self.sumsqr(l.weights)
         return J
 
     def sumsqr(self, x):
         return np.sum(x ** 2)
+
 
     def sigmoid(self, z):
         """
@@ -267,6 +266,7 @@ class Network(object):
         :return: Numpy array activated by sigmoid
         """
         return 1 / (1 + np.exp(-z))
+
 
     def sigmoid_prime(self, z):
         """
@@ -277,6 +277,7 @@ class Network(object):
         y = self.sigmoid(z)
         return y * (1 - y)
 
+
     def reLU(self, z):
         """
         Rectified linear unit, returns the maximum of 0 or z(i,j)
@@ -285,13 +286,16 @@ class Network(object):
         """
         return z * (z > 0)
 
+
     def reLU_prime(self, z):
         """
         Computes ReLU gradient of numpy array, 1 if z(i) > 0
         :param z: Numpy array of the form activation - y/ grad.T.activation[-1] etc
         :return: ReLU gradient (numpy array)
         """
-        return 1 * (z > 0)
+        z[z <= 0] = 0
+        return z
+
 
     def gradient_check(self, X, y, eps=1e-5):
         # run gradient function for a few epochs
@@ -302,7 +306,7 @@ class Network(object):
         m = X.shape[0]
 
         for i, l in enumerate(self.layers):
-            # TODO: Complete gradient check code
+            # TODO: Complete/fix gradient check code
             # For gradient checking I need to take each element of the gradient
             # and compare it to the numerical gradient calculated by G(W(i) + eps)) - G(W(i) - eps)) / 2*eps
             # Looks like previously I was comparing tht weights rather than gradW, which is obvs wrong
