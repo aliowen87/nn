@@ -134,6 +134,7 @@ class Network(object):
         # TODO: Finish spec
         # save number of training examples
         m = X.shape[0]
+        val_cost = 100.0
 
         # primary descent loop
         for j in range(epochs):
@@ -194,6 +195,8 @@ class Network(object):
             # Get the cost and print out every 10 epochs
             if j % 10 == 0:
                 print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (j, cost, val_cost))
+        # end loop, print results
+        print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (epochs, cost, val_cost))
 
 
     def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov",
