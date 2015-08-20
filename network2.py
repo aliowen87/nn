@@ -1,6 +1,5 @@
-__author__ = 'alaso0'
+__author__ = 'aliowen87'
 import numpy as np
-import scipy.stats as stats
 
 class Layer(object):
 
@@ -9,7 +8,10 @@ class Layer(object):
         self.outer = outer
         self.activation = activation
         # initialise weights and bias
-        self.weights = np.random.randn(self.outer, self.inner) / np.sqrt(self.inner + self.outer)
+        if activation == 'relu':
+            self.weights = np.random.randn(self.outer, self.inner) * np.sqrt(2.0 / (self.inner + self.outer))
+        else:
+            self.weights = np.random.randn(self.outer, self.inner) / np.sqrt(self.inner + self.outer)
         self.bias = np.random.randn(self.outer, 1).T
         self.nablaw = np.zeros(self.weights.shape)
         self.nablab = np.zeros(self.bias.shape)
@@ -21,6 +23,8 @@ class Layer(object):
         #RMS/Adaprop cache variable
         self.cache = np.zeros(self.weights.shape)
 
+class ConvolutionalLayer(Layer):
+    pass
 
 class Network(object):
 
@@ -38,7 +42,9 @@ class Network(object):
             'sigmoid': self.sigmoid,
             'sigmoid_prime': self.sigmoid_prime,
             'relu': self.reLU,
-            'relu_prime': self.reLU_prime
+            'relu_prime': self.reLU_prime,
+            'tanh': self.tanh,
+            'tanh_prime': self.tanh_prime
         }
 
         # initialise layers
@@ -80,9 +86,37 @@ class Network(object):
         return train_scaled, val, test
 
 
-    def pca_whiten(self):
-        pass
+    def pca_whiten(self, X, whiten=False, n_components=None, eps=1e-5):
+        """
+        Carries out principle component analysis with optional whitening
+        :param X: Input data
+        :param whiten: Whether to whiten data, True or False
+        :param n_components: number of components to reduce to, defaults to X.shape[1] - 1
+        :param eps: Constant to prevent division by 0, default 1e-5. Increase if data is of the same magnitude
+        :return: Data with n_components parameters, whitened is whiten=True
+        """
+        # TODO: Automatically retain X% variance
+        # if n_components is undefined or > number of parameters then set to default
+        if n_components is None or n_components > X.shape[1]:
+            n_components = X.shape[1] - 1
+        # centre the data on zero
+        X -= np.mean(X, axis=0)
+        # calculate the covariance matrix
+        cov = np.dot(X.T, X) / X.shape[0]
+        # Singular value decomposition
+        U, S, V = np.linalg.svd(cov)
+        # Print variance retained
+        print("Variance retained: %.1f%%" % (np.sum(S[:n_components])/np.sum(S) * 100))
+        # project zero-centred data onto eigenbasis
+        X_rotated = np.dot(X, U)
+        # PCA
+        X_rotated_reduced = np.dot(X, U[:, :n_components])
+        # whitening if flag set to True
+        if whiten:
+            Xwhitened = X_rotated / np.sqrt(S + eps)
+            return Xwhitened
 
+        return X_rotated_reduced
 
     def feedforward(self, X, p=1.0):
         activations = list()
@@ -118,7 +152,7 @@ class Network(object):
             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
 
 
-    def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=1.0,
+    def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=0.0,
                                     Xval=None, yval=None, momentum="nesterov", alpha=0.1, p=1):
         """
         Stochastic gradient descent...
@@ -300,6 +334,15 @@ class Network(object):
         return z
 
 
+    def tanh(self, z):
+        return np.tanh(z)
+
+
+    def tanh_prime(self, z):
+        y = self.tanh(z)
+        return 1 - np.power(y, 2)
+
+
     def gradient_check(self, X, y, eps=1e-5):
         # run gradient function for a few epochs
         epochs = 30
@@ -327,5 +370,98 @@ class Network(object):
             grad = (costplus - costminus) / (2 * eps)
             difference = (np.sum(gradients) - grad) / (np.sum(gradients) + grad)
             print("Difference for Layer %d: %.6f" %(i, difference))
+
+# TODO: Preprocessing and Metrics classes
+
+class Preprocessing(object):
+
+    def __init__(self):
+        pass
+
+    def normalise(self, train, val=None, test=None):
+        """
+        Normalise split train/validation/test data by subtracting train.mean() and scaling by
+        train.std()
+        :param train: training set
+        :param val: validation set (optional)
+        :param test: test set (optional)
+        :return: Normalised train/validation/test set
+        """
+        mean = train.mean()
+        std = train.std()
+        train_scaled = (train - mean) / std
+        if val is not None:
+            val = (val - mean) / std
+        if test is not None:
+            test = (test - mean) / std
+        return train_scaled, val, test
+
+
+    def pca_whiten(self, X, whiten=False, n_components=None, eps=1e-5):
+        """
+        Carries out principle component analysis with optional whitening
+        :param X: Input data
+        :param whiten: Whether to whiten data, True or False
+        :param n_components: number of components to reduce to, defaults to X.shape[1] - 1
+        :param eps: Constant to prevent division by 0, default 1e-5. Increase if data is of the same magnitude
+        :return: Data with n_components parameters, whitened is whiten=True
+        """
+        # TODO: Automatically retain X% variance
+        # if n_components is undefined or > number of parameters then set to default
+        if n_components is None or n_components > X.shape[1]:
+            n_components = X.shape[1] - 1
+        # centre the data on zero
+        X -= np.mean(X, axis=0)
+        # calculate the covariance matrix
+        cov = np.dot(X.T, X) / X.shape[0]
+        # Singular value decomposition
+        U, S, V = np.linalg.svd(cov)
+        # Print variance retained
+        print("Variance retained: %.1f%%" % (np.sum(S[:n_components])/np.sum(S) * 100))
+        # project zero-centred data onto eigenbasis
+        X_rotated = np.dot(X, U)
+        # PCA
+        X_rotated_reduced = np.dot(X, U[:, :n_components])
+        # whitening if flag set to True
+        if whiten:
+            Xwhitened = X_rotated / np.sqrt(S + eps)
+            return Xwhitened
+
+        return X_rotated_reduced
+
+
+class Metrics(object):
+
+    def __init__(self):
+        pass
+
+    def accuracy(y, h):
+        # pick the highest score in each row
+        highest = np.zeros(h.shape)
+        for i, x in enumerate(h):
+            highest[i, x.argmax()] = 1.0
+        # sum by row and then sum again
+        return (sum(np.sum(y * h, axis=0)) / y.shape[0]) * 100.0
+
+    def f1_score(y, h):
+        # pick the highest score in each row
+        highest = np.zeros(h.shape)
+        for i, x in enumerate(h):
+            highest[i, x.argmax()] = 2
+        compare = (y - highest).astype(int)
+        true_pos, false_pos, true_neg, false_neg = 0, 0, 0, 0
+        for x in compare:
+            if x.sum() == -2:
+                false_pos += 1
+            if x.sum() == -1:
+                true_pos += 1
+            if x.sum() == 0:
+                true_neg += 1
+            if x.sum() == 1:
+                false_neg =+1
+        precision = true_pos / (true_pos + false_pos)
+        recall = true_pos / (true_pos + false_neg)
+        # calculate F1 score
+        return 2 * (precision * recall) / (precision + recall)
 
 
