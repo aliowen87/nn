@@ -1,6 +1,7 @@
 __author__ = 'aliowen87'
 import numpy as np
 
+
 class Layer(object):
 
     def __init__(self, inner, outer, activation):
@@ -38,6 +39,11 @@ class Layer(object):
 class ConvolutionalLayer(Layer):
     pass
 
+
+class PoolingLayer(Layer):
+    pass
+
+
 class Network(object):
 
     def __init__(self, layers, seed=42):
@@ -59,7 +65,9 @@ class Network(object):
             'relu': self.reLU,
             'relu_prime': self.reLU_prime,
             'tanh': self.tanh,
-            'tanh_prime': self.tanh_prime
+            'tanh_prime': self.tanh_prime,
+            'softmax': self.softmax,
+            'softmax_prime': self.softmax_prime
         }
 
         # initialise layers
@@ -71,6 +79,7 @@ class Network(object):
         self.val_error = list()
         # storage variable for early stopping
         self.min_val_err = 100.0
+
 
     def inverted_dropout(self, layer, p=1.0):
         """
@@ -135,6 +144,7 @@ class Network(object):
 
         return X_rotated_reduced
 
+
     def feedforward(self, X, p=1.0):
         """
         Standard feedforward algorithm
@@ -193,7 +203,7 @@ class Network(object):
 
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=0.0,
-                                    Xval=None, yval=None, momentum="nesterov", alpha=0.1, p=1):
+                                    Xval=None, yval=None, momentum="nag", alpha=0.1, p=1):
         """
         Stochastic gradient descent...
         :param X: Training examples in the form M X N
@@ -209,6 +219,7 @@ class Network(object):
         :param yval: validation array in the shape m examples by num classes
         :return: None, class variables updated in-place
         """
+        momentum = momentum.lower()
         # save number of training examples
         m = X.shape[0]
         # placeholder for validation error
@@ -296,12 +307,6 @@ class Network(object):
         gradient, 'rmsprop'=RMSProp, else use standard update rule. Default is 'nag'
         :return: None
         """
-        try:
-            assert momentum is str
-        except AssertionError:
-            print('Invalid momentum value used, should be a string')
-            momentum = 'nag'
-        momentum = momentum.lower()
 
         # update gradients with backprop
         self.backprop(X, y, p=p)
@@ -404,6 +409,16 @@ class Network(object):
     def tanh_prime(self, z):
         y = self.tanh(z)
         return 1 - np.power(y, 2)
+
+
+    def softmax(self, z):
+        e = np.exp(z)
+        return e / np.sum(e)
+
+
+    def softmax_prime(self, z):
+        y = self.softmax(z)
+        return y * (1 - y)
 
 
     def gradient_check(self, X, y, eps=1e-5):
