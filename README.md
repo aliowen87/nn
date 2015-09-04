@@ -6,7 +6,7 @@ decent CPU.
 
 
 ## Benchmarks:
-Accuracy of 96.8% on the MNIST Digits dataset using the follow architecture:
+Accuracy of 96.8% on the MNIST Digits dataset using the following architecture:
 
 * `Hidden Layers = 400 x 300 x 200`
 * `Activation = Sigmoid`
