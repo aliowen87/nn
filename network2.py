@@ -4,6 +4,15 @@ import numpy as np
 class Layer(object):
 
     def __init__(self, inner, outer, activation):
+        """
+        Layer class is used to create the layers of the network, initialising the weights and biases and
+        setting up class variables for parameters that are updated with each minibatch (e.g. caching for
+        RMSPROP or velocity for momentum).
+        :param inner: Number of connections into the layer
+        :param outer: Number of connections out of the layer
+        :param activation: Activation function to use for the layer
+        :return:
+        """
         self.inner = inner
         self.outer = outer
         self.activation = activation
@@ -12,10 +21,12 @@ class Layer(object):
             self.weights = np.random.randn(self.outer, self.inner) * np.sqrt(2.0 / (self.inner + self.outer))
         else:
             self.weights = np.random.randn(self.outer, self.inner) / np.sqrt(self.inner + self.outer)
+        # create bias numpy array
         self.bias = np.random.randn(self.outer, 1).T
+        # placeholder numpy array for gradient of weights and biases
         self.nablaw = np.zeros(self.weights.shape)
         self.nablab = np.zeros(self.bias.shape)
-        # Velocity for momentum
+        # Velocity parameter for momentum
         self.velocity = 0.0
         # early stopping weights/bias
         self.best_weights = np.zeros(self.weights.shape)
@@ -23,6 +34,7 @@ class Layer(object):
         #RMS/Adaprop cache variable
         self.cache = np.zeros(self.weights.shape)
 
+# TODO: Convolutional and pooling layer extensions to Layer
 class ConvolutionalLayer(Layer):
     pass
 
@@ -30,8 +42,11 @@ class Network(object):
 
     def __init__(self, layers, seed=42):
         """
-        :param layers: list of tuples of the form (layer_size, activation type) e.g. (200, 'relu')
-        :param seed: seed random number generator
+        The Network class contains the activation and stochastic gradient descent functions necessary to
+        carry out learning.
+        :param layers: list of tuples of the form (layer_size, activation type) e.g. (200, 'relu'), the output layer
+        activation should be set to None.
+        :param seed: seed random number generator, default=42
         """
 
         # seed random number generator
@@ -50,9 +65,11 @@ class Network(object):
         # initialise layers
         self.layers = [Layer(l[0], layers[i+1][0], l[1])
                        for i, l in enumerate(layers[:-1])]
-        # variables for storing errors
+
+        # variables for storing errors for plotting once learning is complete
         self.train_error = list()
         self.val_error = list()
+        # storage variable for early stopping
         self.min_val_err = 100.0
 
     def inverted_dropout(self, layer, p=1.0):
@@ -119,9 +136,18 @@ class Network(object):
         return X_rotated_reduced
 
     def feedforward(self, X, p=1.0):
+        """
+        Standard feedforward algorithm
+        :param X: training examples in the shape m examples x n features
+        :param p: dropout probability, default=1 i.e. no dropout
+        :return: list of activated arrays and dot products
+        """
+        # list of activations and activated z's for passing to backprop
         activations = list()
         zs = list()
         activation = X
+        # loop through each layer and apply that layer's activation function the the previous' activated output
+        # e.g. z1 = sigmoid(X.w1.T + b1) -> z2 = sigmoid(z1.w2.T + b2) etc
         for l in self.layers:
             z = np.dot(activation, l.weights.T) + l.bias
             # save z for backprop
@@ -134,14 +160,28 @@ class Network(object):
             activations.append(activation)
         return activations, zs
 
+    def predict(self, X, p=1.0):
+
+        act, z = self.feedforward()
+        return act[-1]
+
 
     def backprop(self, X, y, p=1.0):
-        # get activations
+        """
+        Backpropogation algorithm
+        :param X: training examples in the shape m examples x n features
+        :param y: target values in binary array, shape m examples x num classes
+        :param p: dropout probability, default = 1 i.e. no dropout
+        :return: None, weights and biases updated in Layer class arrays
+        """
+        # get activations and z-values
         A, Z = self.feedforward(X, p=p)
 
-        # start backprop
+        # initial error, difference between the final output layer and y.
         delta = (A[-1] - y)
+        # store bias gradient as initial error
         self.layers[-1].nablab = delta[0]
+
         self.layers[-1].nablaw = np.dot(delta.T, A[-2])
         for i in range(2, len(self.layers)):
             z = Z[-i]
@@ -159,30 +199,37 @@ class Network(object):
         :param X: Training examples in the form M X N
         :param y: Training labels in the from C * I
         :param epochs: Number of epochs to train
-        :param mini_batch_size: Mini batch size
+        :param mini_batch_size: Minibatch size
         :param eta: Learning rate
         :param lambda_: L2 regularisation parameter
-        :param momentum: Type of momentum to employ, default is 'nesterov'
+        :param momentum: :param momentum: Type of stochastic update strategy to use, 'classic'=momentum,
+        'nag'=nesterov accelerated gradient, 'rmsprop'=RMSProp, else use standard update rule. Default is 'nag'
+        :param alpha: early stopping hyperparameter, will stop when validation error increasing by this factor
+        :param Xval: validation array in the shape m examples by n features
+        :param yval: validation array in the shape m examples by num classes
         :return: None, class variables updated in-place
         """
-        # TODO: Finish spec
         # save number of training examples
         m = X.shape[0]
-        val_cost = 100.0
+        # placeholder for validation error
+        val_cost = 1e4
 
         # primary descent loop
         for j in range(epochs):
-            # annealing
+            # TODO: consider adding annealing or similar back in to speed up learning
             # if j > 0 and j % 5 == 0:
             #     eta *= 0.9
-            # reset velocity
+
+            # reset velocity each epoch
             for l in self.layers:
                 l.velocity = 0.0
 
             # combine training samples and labels for minibatch sampling
             Xy = np.hstack((X,y))
+            # shuffle t
             np.random.shuffle(Xy)
-            # Split back into examples and labels
+
+            # Split back into examples and class labels
             X_shuffled = Xy[:, :X.shape[1]]
             y_shuffled = Xy[:, -y.shape[1]:]
 
@@ -194,7 +241,7 @@ class Network(object):
                 # perform update
                 self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum, p=p)
 
-            # Get the validation cost
+            # If supplied with validation data, calculate validation error and perform early stopping
             if Xval is not None and yval is not None:
                 val_activations, _ = self.feedforward(Xval)
                 val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
@@ -210,6 +257,8 @@ class Network(object):
                         l.best_weights = l.weights
                         l.best_bias = l.bias
 
+                # early stopping starts tracking after first 10 epochs to allow for initial fluctuations at
+                # high learning rates
                 if j > 10 and loss_rate > alpha:
                     print("Stopping early, epoch %d \t loss rate: %.3f \t Val Error: %.6f"
                           % (j, loss_rate, self.min_val_err))
@@ -226,14 +275,15 @@ class Network(object):
             cost = self.cost_function(y, activations[-1], m, lambda_)
             self.train_error.append(cost)
 
-            # Get the cost and print out every 10 epochs
+            # Print the training error every 10 epochs
             if j % 10 == 0:
                 print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (j, cost, val_cost))
-        # end loop, print results
+
+        # end loop (early stopping criterion not exceeded), print results
         print("Epoch: %d \t Cost: %.6f \t Val Cost: %.6f" % (epochs, cost, val_cost))
 
 
-    def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nesterov",
+    def update_mini_batch(self, X, y, eta, lambda_, m, mu=0.9, momentum="nag",
                           decay=0.99, p=1.0):
         """
         Update weights and bias based on minibatch
@@ -242,13 +292,21 @@ class Network(object):
         :param eta: learning rate
         :param lambda_: L2 regularisation parameter
         :param decay: RMSProp decay hyperparameter
+        :param momentum: Type of stochastic update strategy to use, 'classic'=momentum, 'nag'=nesterov accelerated
+        gradient, 'rmsprop'=RMSProp, else use standard update rule. Default is 'nag'
         :return: None
         """
-        # TODO: How do I differentiate between different update strategies, e.g. Momentum, NAG, RMSPROP
+        try:
+            assert momentum is str
+        except AssertionError:
+            print('Invalid momentum value used, should be a string')
+            momentum = 'nag'
+        momentum = momentum.lower()
+
         # update gradients with backprop
         self.backprop(X, y, p=p)
 
-        # Momentum
+        # Momentum c.f. http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
         if momentum == "classic":
             for l in self.layers:
                 l.bias -= 1 / m * eta * l.nablab
@@ -256,8 +314,8 @@ class Network(object):
                 l.weights += l.velocity
             return None
 
-        # Nesterov
-        if momentum == "nesterov":
+        # Nesterov accelerated gradient (NAG) c.f http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        if momentum == "nag":
             for l in self.layers:
                 l.bias -= 1 / m * eta * l.nablab
                 vel_prev = l.velocity
@@ -265,7 +323,7 @@ class Network(object):
                 l.weights += - mu * vel_prev + (1 + mu) * l.velocity
             return None
 
-        # RMSProp c.f. Hinton
+        # RMSProp c.f. Hinton http://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf
         # cache = decay * cache + (1 - decay) * grad ** 2
         # weights += - eta * grad / np.sqrt(cache + 1e-8)
         if momentum == 'rmsprop':
@@ -284,10 +342,15 @@ class Network(object):
     def cost_function(self, y, h, m, lambda_):
         """
         Logloss cost function
+        :param y: Binary array of ground truth in the shape m x num classes
+        :param h: Output layer from network (i.e. the predictions)
+        :param m: Number of training examples
         :return: Logloss cost
         """
+        # cross-entropy error/cost function c.f. https://en.wikipedia.org/wiki/Cross_entropy
         J = - 1 / m * np.sum(y * np.log(h) + (1 - y) * np.log(1 - h))
 
+        # L2 regularisation
         for l in self.layers:
             J += lambda_  / (2 * m) * self.sumsqr(l.weights)
         return J
@@ -344,6 +407,7 @@ class Network(object):
 
 
     def gradient_check(self, X, y, eps=1e-5):
+        # TODO: Complete/fix gradient check code
         # run gradient function for a few epochs
         epochs = 30
         mini_batch_size = 50
@@ -352,7 +416,6 @@ class Network(object):
         m = X.shape[0]
 
         for i, l in enumerate(self.layers):
-            # TODO: Complete/fix gradient check code
             # For gradient checking I need to take each element of the gradient
             # and compare it to the numerical gradient calculated by G(W(i) + eps)) - G(W(i) - eps)) / 2*eps
             # Looks like previously I was comparing tht weights rather than gradW, which is obvs wrong
