@@ -172,7 +172,7 @@ class Network(object):
 
     def predict(self, X, p=1.0):
 
-        act, z = self.feedforward()
+        act, z = self.feedforward(X, p=p)
         return act[-1]
 
 
@@ -353,7 +353,7 @@ class Network(object):
         :return: Logloss cost
         """
         # cross-entropy error/cost function c.f. https://en.wikipedia.org/wiki/Cross_entropy
-        J = - 1 / m * np.sum(y * np.log(h) + (1 - y) * np.log(1 - h))
+        J = - 1 / m * np.sum(y * np.log(h+ 1e-8) + (1 - y) * np.log(1 - h + 1e-8))
 
         # L2 regularisation
         for l in self.layers:
