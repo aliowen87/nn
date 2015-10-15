@@ -366,7 +366,7 @@ class Network(object):
                         filter_ = X[i, posw:filter_width+posw, posh:filter_height+posh, z]
                         output[i, w, h, z], index = pool_layer.pool_function(filter_)
                         # save location of the value picked by the pool function, e.g. max in layer class variable
-                        pool_layer.indices.append((index + i, (index + w), (index + h), index + z))
+                        pool_layer.indices.append((i, (index + w), (index + h), z))
 
         return output
 
@@ -766,8 +766,8 @@ class Metrics(object):
 #     {'type': 'fc', 'inner':500, 'outer':1, 'activation':'sigmoid'}
 # ]
 layers=[
-    # {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
-    # {'type':'conv', 'depth':2, 'num_filters':2, 'filter_size':3},
+    {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
+    {'type':'conv', 'depth':2, 'num_filters':2, 'filter_size':3},
     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'}
 ]
 nn = Network(layers)
