@@ -350,16 +350,16 @@ class Network(object):
         filter_height, filter_width, stride = pool_layer.filter_height, pool_layer.filter_width, pool_layer.stride
 
         # create output placeholders
-        output_width = (width - filter_width) / stride + 1
-        output_height = (height - filter_height) / stride + 1
-        output = np.zeros((n, output_height, output_width, d))
+        output_width = int((width - filter_width) / stride + 1)
+        output_height = int((height - filter_height) / stride + 1)
+        output = np.zeros((n, output_height, output_width, depth))
 
         # loop inception
         # TODO: Less retarded way of doing it, i.e. im2col or matrix reshaping
         for i in range(n):
-            for z in range(d):
-                for w in range(width):
-                    for h in range(height):
+            for z in range(depth):
+                for w in range(output_width):
+                    for h in range(output_height):
                         posw = w * stride
                         posh = h * stride
                         # create filter_width x filter_height filter at depth d
@@ -755,15 +755,20 @@ class Metrics(object):
 ###################################################
 # testing
 
-layers = [
-    {'type':'conv', 'depth':3, 'num_filters':32, 'filter_size':3},
-    {'type':'conv', 'depth':32, 'num_filters':32, 'filter_size':3},
-    {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
-    {'type':'conv', 'depth':32, 'num_filters':64, 'filter_size':3},
-    {'type':'conv', 'depth':64, 'num_filters':64, 'filter_size':3},
-    {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
-    {'type': 'fc', 'inner':12*12*64, 'outer':500, 'activation':'sigmoid'},
-    {'type': 'fc', 'inner':500, 'outer':1, 'activation':'sigmoid'}
+# layers = [
+#     {'type':'conv', 'depth':3, 'num_filters':32, 'filter_size':3},
+#     {'type':'conv', 'depth':32, 'num_filters':32, 'filter_size':3},
+#     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
+#     {'type':'conv', 'depth':32, 'num_filters':64, 'filter_size':3},
+#     {'type':'conv', 'depth':64, 'num_filters':64, 'filter_size':3},
+#     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
+#     {'type': 'fc', 'inner':12*12*64, 'outer':500, 'activation':'sigmoid'},
+#     {'type': 'fc', 'inner':500, 'outer':1, 'activation':'sigmoid'}
+# ]
+layers=[
+    # {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
+    # {'type':'conv', 'depth':2, 'num_filters':2, 'filter_size':3},
+    {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'}
 ]
 nn = Network(layers)
 print(nn.layers)
