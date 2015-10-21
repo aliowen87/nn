@@ -68,6 +68,10 @@ class ConvolutionalLayer(object):
         self.weights = np.random.randn(self.num_filters, self.filter_size, self.filter_size, self.depth)
         self.bias = np.random.randn(self.num_filters)
 
+        # placeholder numpy array for gradient of weights and biases
+        self.nablaw = np.zeros(self.weights.shape)
+        self.nablab = np.zeros(self.bias.shape)
+
         # calculate stride and padding hyperparams
         self.stride, self.padding = self.calc_stride_padding()
 
@@ -103,17 +107,16 @@ class MaxPoolLayer(object):
         # class variable to store the indices of max
         self.indices = list()
 
-    def pool_function(self, x):
+    def pool_function(self, x, type='reshape'):
         """
         Returns the max value in x, assumed an array of shape filter width x filter height
         :param x: filtered input
         :return: Max value
         """
-        return x.max(), x.argmax()
-
-
-class PoolingLayer(object):
-    pass
+        if type == 'reshape':
+            return x.max(axis=2).max(axis=3)
+        else:
+            return x.max(), x.argmax()
 
 
 class Network(object):
@@ -255,7 +258,7 @@ class Network(object):
         zs = list()
         activation = X
         # loop through each layer and apply that layer's activation function the the previous' activated output
-        # e.g. z1 = sigmoid(X.w1.T + b1) -> z2 = sigmoid(z1.w2.T + b2) etc
+        # e.g. a1 = sigmoid(X.w1.T + b1) -> a2 = sigmoid(z1.w2.T + b2) etc
         for layer in self.layers:
             if layer.type == 'conv':
                 # Convolution
@@ -272,9 +275,8 @@ class Network(object):
                 activations.append(z)
             else:
                 # if the previous layer was a conv/pool layer then will need to convert from a 4D matrix to 2D
-                if len(activation.shape) == 4:
-                    flat = activation.shape[1] * activation.shape[2] * activation.shape[3]
-                    activation = activation.reshape((activation.shape[0], flat))
+                if len(activation.shape) > 2:
+                    activation = self.sparse_to_dense(activation)
                 z = np.dot(activation, layer.weights.T) + layer.bias
                 # save z for backprop
                 zs.append(z)
@@ -285,6 +287,13 @@ class Network(object):
                 # save activation for backprop
                 activations.append(activation)
         return activations, zs
+
+    def sparse_to_dense(self, x):
+        flat = x.shape[1] * x.shape[2] * x.shape[3]
+        return x.reshape((x.shape[0], flat))
+
+    def dense_to_sparse(self, x, shape):
+        return x.reshape(shape)
 
     def predict(self, X, p=1.0):
         """
@@ -315,7 +324,7 @@ class Network(object):
         output_width = (width + 2 * padding - filter_height) / stride + 1
         output = np.zeros((n, output_height, output_width, num_filters))
 
-        # convolution without im2col, 4-deep D:
+        # convolution without im2col, less mem more cpu:
         # loop through training examples
         for i in range(n):
             # loop through filters
@@ -329,13 +338,11 @@ class Network(object):
                         # zero pad the example
                         padded = np.pad(X[i, :, :, :], ((padding, padding), (padding, padding),
                                                          (0, 0)), mode='constant')
-                        # TODO: check these indices are the right way round
-                        filter_ = padded[posh:filter_height + posh, posw:filter_width + posw, :]
+                        filter_ = padded[posw:filter_width + posw, posh:filter_height + posh, :]
 
                         output[i, w, h, f] = np.sum(filter_ * conv_layer.weights[f,:,:,:]) + conv_layer.bias[f]
 
         # TODO: im2col implementation
-        # TODO: activation functions
         return output
 
 
@@ -354,23 +361,43 @@ class Network(object):
         output_height = int((height - filter_height) / stride + 1)
         output = np.zeros((n, output_height, output_width, depth))
 
-        # loop inception
         # TODO: Less retarded way of doing it, i.e. im2col or matrix reshaping
-        for i in range(n):
-            for z in range(depth):
-                for w in range(output_width):
-                    for h in range(output_height):
-                        posw = w * stride
-                        posh = h * stride
-                        # create filter_width x filter_height filter at depth d
-                        filter_ = X[i, posw:filter_width+posw, posh:filter_height+posh, z]
-                        output[i, w, h, z], index = pool_layer.pool_function(filter_)
-                        # save location of the value picked by the pool function, e.g. max in layer class variable
-                        pool_layer.indices.append((i, (index + w), (index + h), z))
+        # reshape method, quickest method if filter is square and stride is the same size
+        if filter_height == filter_width:
+            output, pool_layer.reshaped = self.pool_reshape_forward(X, pool_layer)
+        else:
+            # slow way
+            for i in range(n):
+                for z in range(depth):
+                    for w in range(output_width):
+                        for h in range(output_height):
+                            posw = w * stride
+                            posh = h * stride
+                            # create filter_width x filter_height filter at depth d
+                            filter_ = X[i, posw:filter_width+posw, posh:filter_height+posh, z]
+                            output[i, w, h, z], index = pool_layer.pool_function(filter_)
+                            # save location of the value picked by the pool function, e.g. max in layer class variable
+                            pool_layer.indices.append((i, (index + w), (index + h), z))
 
         return output
 
-    # TODO: convoluted/pooled backprop
+    def pool_reshape_forward(self, X, pool_layer):
+        n, w, h, d = X.shape
+        filter_height, filter_width, stride = pool_layer.filter_height, pool_layer.filter_width, pool_layer.stride
+
+        # error checks
+        assert filter_height == filter_width == stride, 'Pool parameters not equal w = h = s'
+        assert h % filter_height == 0, 'Pool height doesn\'t tile with input'
+        assert w % filter_width == 0, 'Pool width doesn\'t tile with input'
+
+        # reshape input matrix
+        x_reshaped = X.reshape(n, w / filter_width, filter_width, h / filter_height, filter_height, d)
+        output = pool_layer.pool_function(x_reshaped)
+
+        return output, x_reshaped
+
+
+    # TODO: convoluted/pooled backprop, shit is getting messy
 
     def backprop(self, X, y, p=1.0):
         """
@@ -383,34 +410,162 @@ class Network(object):
         # get activations and z-values
         A, Z = self.feedforward(X, p=p)
 
-        # initial error, difference between the final output layer and y.
-        delta = (A[-1] - y)
+        ### Start rewrite
+        # TODO: Should I be using the cross-entropy/softmax function here rather than a difference? yes
+        output = self.layers[-1]
+        activation_prime = self.activation_functions[output.activation + '_prime'](Z[-1])
+        delta = (A[-1] - y) * activation_prime
+
         # store bias gradient as initial error
-        self.layers[-1].nablab = delta[0]
-
-        self.layers[-1].nablaw = np.dot(delta.T, A[-2])
+        output.nablab = delta.mean()
+        output.nablaw = np.dot(delta.T, A[-2])
         for i in range(2, len(self.layers)):
-            z = Z[-i]
-            activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
-            delta = np.dot(delta, self.layers[-i+1].weights) * activation_prime
+            #backprop is different for pool layers
+            layer = self.layers[-i]
+            if layer.type == 'pool':
+                a = A[-i-1]
+                # TODO: check for what type of feedforward was used e.g reshape or loopception
+                # reshape from fc layer, assumes that filter is square...
+                if len(delta.shape) == 2:
+                    # TODO: consider storing the shape in the layer instance
+                    size = np.sqrt(delta.shape[1] / layer.filter_width)
+                    new_shape = (delta.shape[0], size, size, layer.filter_width)
+                    print('old', delta.shape, 'new', new_shape)
+                    delta = self.dense_to_sparse(delta, new_shape)
+                delta = self.pool_backprop_reshape(delta, a, layer)
 
-            self.layers[-i].nablab = delta.mean(axis=0)
-            self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
+            # perform backprop for a convolution layer
+            elif layer.type == 'conv':
+                # delta = self.conv_backprop(delta, Z[-i-1], layer[-i+1])
+                z = Z[-i]
+                activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
+                delta = np.dot(delta, self.layers[-i+1].weights * activation_prime)
+                self.layers[-i].nablab = delta.mean(axis=0)
+                self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
 
-    def conv_backprop(self, delta, activation):
-        pass
+            # fc layer backprop
+            else:
+                z = Z[-i]
+                activation_prime = self.activation_functions[layer.activation + '_prime'](z)
+                delta = np.dot(delta, self.layers[-i+1].weights) * activation_prime
+
+                # update gradients
+                layer.nablab = delta.mean(axis=0)
+                # check shape of previous activation, reshape if necessary
+                if len(A[-i-1].shape) > 2:
+                    a = self.sparse_to_dense(A[-i-1])
+                    self.layers[-i].nablaw = np.dot(delta.T, a)
+                else:
+                    layer.nablaw = np.dot(delta.T, A[-i-1])
 
 
-    def pool_backprop(self, delta, activation):
+        ### End rewrite
+
+        # # initial error, difference between the final output layer and y.
+        # # TODO: Should I be using the cross-entropy/softmax function here rather than a difference? yes
+        # output = self.layers[-1]
+        # activation_prime = self.activation_functions[output.activation + '_prime'](Z[-2])
+        # delta = (A[-1] - y) * activation_prime
+        # # store bias gradient as initial error
+        # self.layers[-1].nablab = delta.mean()
+        #
+        # # Check matrix shape for previous activation
+        # if len(A[-2].shape) == 4:
+        #     a2 = self.sparse_to_dense(A[-2])
+        #     self.layers[-1].nablaw = np.dot(delta.T, a2)
+        # else:
+        #     self.layers[-1].nablaw = np.dot(delta.T, A[-2])
+        #
+        # # start main backprop loop
+        # for i in range(2, len(self.layers)):
+        #     layer = self.layers[-i]
+        #     print(layer)
+        #     print(delta.shape)
+        #     # backprop is different for pool layers
+        #     if layer.type == 'pool':
+        #         a = A[-i-1]
+        #         # TODO: check for what type of feedforward was used e.g reshape or loopception
+        #         # reshape from fc layer, assumes that filter is square...
+        #         if len(delta.shape) == 2:
+        #             size = delta.shape[1] / layer.filter_width
+        #             new_shape = (delta.shape[0], size, size, layer.filter_width)
+        #             delta = self.dense_to_sparse(delta, new_shape)
+        #             print(delta.shape)
+        #         delta = self.pool_backprop_reshape(delta, a, layer)
+        #
+        #     # perform backprop for a convolution layer
+        #     elif layer.type == 'conv':
+        #         # delta = self.conv_backprop(delta, Z[-i-1], layer[-i+1])
+        #         z = Z[-i]
+        #         activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
+        #         delta = np.dot(delta, self.layers[-i+1].weights * activation_prime)
+        #         self.layers[-i].nablab = delta.mean(axis=0)
+        #         self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
+        #
+        #     # perform backprop for a fully-connected layer
+        #     else:
+        #         if self.layers[-i].type == 'pool':
+        #             # TODO: is this correct? Probably not
+        #             activation_prime = 1
+        #         else:
+        #             z = Z[-i]
+        #             activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
+        #         delta = np.dot(delta, self.layers[-i+1].weights.T) * activation_prime
+        #
+        #         self.layers[-i].nablab = delta.mean(axis=0)
+        #         # check shape work for dot product, if not reshape it
+        #         if len(A[-i-1].shape) > 2:
+        #             a = self.sparse_to_dense(A[-i-1])
+        #             self.layers[-i].nablaw = np.dot(delta.T, a)
+        #         else:
+        #             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
+
+    def conv_backprop(self, delta, z, conv_layer):
+        """
+
+        :param delta:
+        :param activation:
+        :param pool_layer:
+        :return:
+        """
+        activation_prime = self.activation_functions[conv_layer.activation + '_prime'](z)
+        delta = np.dot(delta, conv_layer.weights) * activation_prime
+
+        return delta
+
+
+    def pool_backprop(self, delta, activation, pool_layer):
         """
         Pool backprop works by applying the error according to the type of pooling used, e.g. in a maxpool the
-        error is applied to the max
+        error is applied to the max value
         :param delta:
         :param activation:
         :return:
         """
-        pass
+        return self.pool_backprop_reshape(delta, activation, pool_layer)
 
+    def pool_backprop_reshape(self, delta, activation, pool_layer):
+        """
+        Backpropagation for a pool layer when the reshape method was used for feedforward
+        :param delta:
+        :param activation:
+        :param pool_layer:
+        :return:
+        """
+        # TODO: Generalise to any pool layer, currently this is for a max pool
+        x_reshaped = pool_layer.reshaped
+        dx_reshaped = np.zeros_like(x_reshaped)
+        # act_newaxis = activation[:, :, np.newaxis, :, np.newaxis, :]
+        act_newaxis = activation.reshape(x_reshaped.shape)
+        mask = (x_reshaped == act_newaxis)
+        delta_newaxis = delta[:, : , np.newaxis, :, np.newaxis, :]
+        # delta_newaxis = delta.reshape(x_reshaped.shape)
+        delta_broadcast, _ = np.broadcast_arrays(delta_newaxis, dx_reshaped)
+        dx_reshaped[mask] = delta_broadcast[mask]
+        dx_reshaped /= np.sum(mask, axis=(2, 4), keepdims=True)
+        dx = dx_reshaped.reshape(activation.shape)
+
+        return dx
 
     def stochastic_gradient_descent(self, X, y, epochs, mini_batch_size, eta=0.01, lambda_=0.0,
                                     Xval=None, yval=None, momentum="nag", alpha=0.1, p=1):
@@ -446,19 +601,30 @@ class Network(object):
                 l.velocity = 0.0
 
             # combine training samples and labels for minibatch sampling
-            Xy = np.hstack((X,y))
+            # reshape X to align with target matrix (i.e. 2D)
+            shape = X.shape
+            if len(shape) > 2:
+                dense_X = self.sparse_to_dense(X)
+                Xy = np.hstack((dense_X,y))
+            else:
+            # TODO: Can this step be removed? Do I need to shuffle each epoch
+                Xy = np.hstack((X,y))
             # shuffle t
             np.random.shuffle(Xy)
 
             # Split back into examples and class labels
-            X_shuffled = Xy[:, :X.shape[1]]
+            X_shuffled = Xy[:, :Xy.shape[1]-y.shape[1]]
+            # reshape X_shuffled if necessary
+            if len(shape) > 2:
+                X_shuffled = self.dense_to_sparse(X_shuffled, shape)
+
             y_shuffled = Xy[:, -y.shape[1]:]
 
             # minibatch loop
             for k in range(0, m, mini_batch_size):
                 # slice minibatches
-                mini_X = X_shuffled[k:k+mini_batch_size, :]
-                mini_y = y_shuffled[k:k+mini_batch_size, :]
+                mini_X = X_shuffled[k:k+mini_batch_size,]
+                mini_y = y_shuffled[k:k+mini_batch_size,]
                 # perform update
                 self.update_mini_batch(mini_X, mini_y, eta, lambda_, m, momentum=momentum, p=p)
 
@@ -521,37 +687,34 @@ class Network(object):
         # update gradients with backprop
         self.backprop(X, y, p=p)
 
-        # Momentum c.f. http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        if momentum == "classic":
-            for l in self.layers:
-                l.bias -= 1 / m * eta * l.nablab
-                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
-                l.weights += l.velocity
-            return None
-
-        # Nesterov accelerated gradient (NAG) c.f http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        if momentum == "nag":
-            for l in self.layers:
-                l.bias -= 1 / m * eta * l.nablab
-                vel_prev = l.velocity
-                l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
-                l.weights += - mu * vel_prev + (1 + mu) * l.velocity
-            return None
-
-        # RMSProp c.f. Hinton http://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf
-        # cache = decay * cache + (1 - decay) * grad ** 2
-        # weights += - eta * grad / np.sqrt(cache + 1e-8)
-        if momentum == 'rmsprop':
-            for l in self.layers:
-                l.cache = decay * l.cache + (1 - decay) * l.nablaw ** 2
-                l.weights -= (eta * l.nablaw) / np.sqrt(l.cache + 1e-8)
-            return None
-
-        # default update
-        # update weights and bias with simple gradient descent
         for l in self.layers:
-            l.bias -= 1 / m * eta * l.nablab
-            l.weights -= eta * (1 / m * l.nablaw - lambda_ * l.weights)
+            # no updates requried for the pool layer
+            if l.type != 'pool':
+                # Momentum c.f. http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+                if momentum == "classic":
+                    l.bias -= 1 / m * eta * l.nablab
+                    l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
+                    l.weights += l.velocity
+
+                # Nesterov accelerated gradient (NAG) c.f http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+                elif momentum == "nag":
+                    l.bias -= 1 / m * eta * l.nablab
+                    vel_prev = l.velocity
+                    l.velocity = mu * l.velocity - eta * (1 / m * l.nablaw - lambda_ * l.weights)
+                    l.weights += - mu * vel_prev + (1 + mu) * l.velocity
+
+                # RMSProp c.f. Hinton http://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf
+                # cache = decay * cache + (1 - decay) * grad ** 2
+                # weights += - eta * grad / np.sqrt(cache + 1e-8)
+                elif momentum == 'rmsprop':
+                    l.cache = decay * l.cache + (1 - decay) * l.nablaw ** 2
+                    l.weights -= (eta * l.nablaw) / np.sqrt(l.cache + 1e-8)
+
+                # default update
+                # update weights and bias with simple gradient descent
+                else:
+                    l.bias -= 1 / m * eta * l.nablab
+                    l.weights -= eta * (1 / m * l.nablaw - lambda_ * l.weights)
 
 
     def cost_function(self, y, h, m, lambda_):
@@ -563,11 +726,12 @@ class Network(object):
         :return: Logloss cost
         """
         # cross-entropy error/cost function c.f. https://en.wikipedia.org/wiki/Cross_entropy
-        J = - 1 / m * np.sum(y * np.log(h + 1e-8) + (1 - y) * np.log(1 - (h +1e8)))
+        J = - 1 / m * np.nan_to_num(np.sum(y * np.log(h) + (1 - y) * np.log(1 - (h))))
 
         # L2 regularisation
         for l in self.layers:
-            J += lambda_  / (2 * m) * self.sumsqr(l.weights)
+            if l.type != 'pool':
+                J += lambda_  / (2 * m) * self.sumsqr(l.weights)
         return J
 
     def sumsqr(self, x):
@@ -765,14 +929,47 @@ class Metrics(object):
 #     {'type': 'fc', 'inner':12*12*64, 'outer':500, 'activation':'sigmoid'},
 #     {'type': 'fc', 'inner':500, 'outer':1, 'activation':'sigmoid'}
 # ]
+
+# smaller net
+
+# layers=[
+#     {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
+#     {'type':'conv', 'depth':2, 'num_filters':2, 'filter_size':3},
+#     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
+#     {'type': 'fc', 'inner':25*25*2, 'outer':50, 'activation':'sigmoid'},
+#     {'type': 'fc', 'inner':50, 'outer':1, 'activation':'sigmoid'}
+# ]
+# nn = Network(layers)
+# print(nn.layers)
+# X = np.random.rand(10, 50, 50, 3)
+# y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
+# a,z = nn.feedforward(X)
+# print([x.shape for x in z])
+# nn.backprop(X, y)
+# print("Done")
+
+# test pool backprop
+
+# delta = a[-1].T - y
+# dz = nn.activation_functions[nn.layers[-1].activation + '_prime'](z[-1])
+# delta2 = (np.dot(delta.T, nn.layers[-1].weights) * dz).reshape((10, 25, 25, 2))
+# delta3 = nn.pool_backprop_reshape(delta2, a[-3], nn.layers[-2])
+
+# FC Network
+
 layers=[
     {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
-    {'type':'conv', 'depth':2, 'num_filters':2, 'filter_size':3},
-    {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'}
+    {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
+    {'type': 'fc', 'inner':1250, 'outer':500, 'activation':'sigmoid'},
+    {'type': 'fc', 'inner':500, 'outer':50, 'activation':'sigmoid'},
+    {'type': 'fc', 'inner':50, 'outer':1, 'activation':'sigmoid'}
 ]
 nn = Network(layers)
 print(nn.layers)
 X = np.random.rand(10, 50, 50, 3)
-y = [0, 1, 1, 0, 1, 1, 0, 1, 0, 0]
+y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
 a,z = nn.feedforward(X)
 print([x.shape for x in z])
+nn.backprop(X, y)
+print("Done")
+nn.stochastic_gradient_descent(X, y, 50, 10, eta=1e-2, momentum='rmsprop')
