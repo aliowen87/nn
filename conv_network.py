@@ -75,6 +75,14 @@ class ConvolutionalLayer(object):
         # calculate stride and padding hyperparams
         self.stride, self.padding = self.calc_stride_padding()
 
+        # Velocity parameter for momentum
+        self.velocity = 0.0
+        # early stopping weights/bias
+        self.best_weights = np.zeros(self.weights.shape)
+        self.best_bias = np.zeros(self.bias.shape)
+        #RMS/Adaprop cache variable
+        self.cache = np.zeros(self.weights.shape)
+
 
     def calc_stride_padding(self):
         """
@@ -259,6 +267,7 @@ class Network(object):
         activation = X
         # loop through each layer and apply that layer's activation function the the previous' activated output
         # e.g. a1 = sigmoid(X.w1.T + b1) -> a2 = sigmoid(z1.w2.T + b2) etc
+        # TODO: feedforward algorithm could potentially be abstracted into the layer classes for simplicity
         for layer in self.layers:
             if layer.type == 'conv':
                 # Convolution
@@ -316,34 +325,127 @@ class Network(object):
         W2 = (w + 2 * padding - filter_height) / stride + 1
         """
         n, width, height, depth = X.shape
+        # cache shape in class variable
+        conv_layer.shape = X.shape
+
         num_filters, filter_height, filter_width, _ = conv_layer.weights.shape
         stride, padding = conv_layer.stride, conv_layer.padding
 
         # create output placeholder
         output_height = (height + 2 * padding - filter_height) / stride + 1
-        output_width = (width + 2 * padding - filter_height) / stride + 1
+        output_width = (width + 2 * padding - filter_width) / stride + 1
         output = np.zeros((n, output_height, output_width, num_filters))
 
-        # convolution without im2col, less mem more cpu:
-        # loop through training examples
-        for i in range(n):
-            # loop through filters
-            for f in range(num_filters):
-                # loop through filters along 'width' dimension
-                for w in range(width):
-                    # loop through filters along 'height' dimension
-                    for h in range(height):
-                        posw = w * stride
-                        posh = h * stride
-                        # zero pad the example
-                        padded = np.pad(X[i, :, :, :], ((padding, padding), (padding, padding),
-                                                         (0, 0)), mode='constant')
-                        filter_ = padded[posw:filter_width + posw, posh:filter_height + posh, :]
+        # using im2col
+        X_cols = self.im2col(X, filter_height, filter_width, padding, stride)
+        # cache in class variable
+        conv_layer.X_cols = X_cols
 
-                        output[i, w, h, f] = np.sum(filter_ * conv_layer.weights[f,:,:,:]) + conv_layer.bias[f]
+        # collapses weights into matrix shape k, fw * fh * d
+        f = conv_layer.weights.shape[0]
+        weights = conv_layer.weights.reshape((f, -1))
+        weights = np.dot(weights, X_cols) + conv_layer.bias.reshape(-1, 1)
+        output = weights.reshape(f, output_height, output_width, X.shape[0])
+        output = output.transpose(3, 1, 2, 0)
 
-        # TODO: im2col implementation
         return output
+
+        # # convolution without im2col, less mem more cpu:
+        # # loop through training examples
+        # for i in range(n):
+        #     # loop through filters
+        #     for f in range(num_filters):
+        #         # loop through filters along 'width' dimension
+        #         for w in range(width):
+        #             # loop through filters along 'height' dimension
+        #             for h in range(height):
+        #                 posw = w * stride
+        #                 posh = h * stride
+        #                 # zero pad the example
+        #                 padded = np.pad(X[i, :, :, :], ((padding, padding), (padding, padding),
+        #                                                  (0, 0)), mode='constant')
+        #                 filter_ = padded[posw:filter_width + posw, posh:filter_height + posh, :]
+        #
+        #                 output[i, w, h, f] = np.sum(filter_ * conv_layer.weights[f,:,:,:]) + conv_layer.bias[f]
+        #
+        # return output
+
+    def im2col(self, X, filter_height, filter_width, padding=1, stride=1):
+        """
+        Numpy implementation of the im2col method (distinct)
+        :param X: Input matrix
+        :param filter_height: filter height
+        :param filter_width: filter width
+        :param padding: depth of zero-padding to be applied, default = 1
+        :param stride: stride length, default = 1
+        :return: X with padding applied as a flattened convolution
+        """
+        # apply zero-padding
+        X_padded = np.pad(X, ((0,0), (padding, padding), (padding, padding), (0,0)), mode='constant')
+
+        # get indices
+        i, j, k = self.im2col_idx(X.shape, filter_height, filter_width, padding, stride)
+        d = X.shape[-1]
+        X_cols = X_padded[:, i, j, k]
+        X_cols = X_cols.reshape(filter_height * filter_width * d, -1)
+
+        return X_cols
+
+
+    def im2col_idx(self, shape, filter_height, filter_width, padding, stride):
+        """
+        Convenience function to get the indices for the im2col and col2im functions based on the filter
+        size and output size
+        :param d: depth of the input matrix
+        :param filter_height: filter height
+        :param filter_width: filter width
+        :param stride:
+        :return:
+        """
+        n, w, h, d = shape
+        # check filters are of the right size
+        assert ((h + 2 * padding - filter_height) % stride == 0)
+        assert ((w + 2 * padding - filter_width) % stride == 0)
+        # calculate size of the output of the convolution
+        out_h = (h + 2 * padding - filter_height) / stride + 1
+        out_w = (w + 2 * padding - filter_width) / stride + 1
+
+        # calculate the indices
+        i0 = np.tile(np.repeat(np.arange(filter_height), filter_width), d)
+        i1 = stride * np.repeat(np.arange(out_h), out_w)
+        # combine, -1 transposes the elements in that dimension essentially i0 = rows, i1 = columns
+        i = i0.reshape(-1, 1) + i1.reshape(1, -1).astype(int)
+
+        j0 = np.tile(np.arange(filter_width), filter_height * d)
+        j1 = stride * np.tile(np.arange(out_w), out_h)
+        j = j0.reshape(-1, 1) + j1.reshape(1, -1).astype(int)
+
+        k = np.repeat(np.arange(d), filter_height * filter_width).reshape(-1, 1).astype(int)
+
+        return i, j, k
+
+    def col2im(self, cols, shape, filter_height, filter_width, padding=1, stride=1):
+        """
+        Inverse operation of im2col
+        :param cols: col2im representation of original matrix
+        :param shape: Shape of the input matrix
+        :param filter_height:
+        :param filter_width:
+        :param padding:
+        :param stride:
+        :return: Padded matrix prior to convolution
+        """
+        n, w, h, d, = shape
+        h_padded, w_padded = h + 2 * padding, w + 2 * padding
+        X_padded = np.zeros((n, w_padded, h_padded, d), dtype=cols.dtype)
+        i, j, k = self.im2col_idx(shape, filter_height, filter_width, padding, stride)
+
+        cols_reshaped = cols.reshape((filter_width * filter_height * d), -1, n)
+        cols_reshaped = cols_reshaped.transpose(2, 0, 1)
+        np.add.at(X_padded, (slice(None), i, j, k), cols_reshaped)
+        if padding == 0:
+            return X_padded
+        return X_padded[:, padding:-padding, padding:-padding, :]
 
 
     def pool_feedforward(self, X, pool_layer):
@@ -384,7 +486,6 @@ class Network(object):
     def pool_reshape_forward(self, X, pool_layer):
         n, w, h, d = X.shape
         filter_height, filter_width, stride = pool_layer.filter_height, pool_layer.filter_width, pool_layer.stride
-
         # error checks
         assert filter_height == filter_width == stride, 'Pool parameters not equal w = h = s'
         assert h % filter_height == 0, 'Pool height doesn\'t tile with input'
@@ -393,6 +494,8 @@ class Network(object):
         # reshape input matrix
         x_reshaped = X.reshape(n, w / filter_width, filter_width, h / filter_height, filter_height, d)
         output = pool_layer.pool_function(x_reshaped)
+        # cache the shape of the layer
+        pool_layer.shape = output.shape
 
         return output, x_reshaped
 
@@ -411,7 +514,7 @@ class Network(object):
         A, Z = self.feedforward(X, p=p)
 
         ### Start rewrite
-        # TODO: Should I be using the cross-entropy/softmax function here rather than a difference? yes
+        # TODO: Should I be using the cross-entropy/softmax function here rather than a difference?
         output = self.layers[-1]
         activation_prime = self.activation_functions[output.activation + '_prime'](Z[-1])
         delta = (A[-1] - y) * activation_prime
@@ -422,26 +525,29 @@ class Network(object):
         for i in range(2, len(self.layers)):
             #backprop is different for pool layers
             layer = self.layers[-i]
+
+            # backprop for pool layer
             if layer.type == 'pool':
                 a = A[-i-1]
+                d = a.shape[-1]
                 # TODO: check for what type of feedforward was used e.g reshape or loopception
                 # reshape from fc layer, assumes that filter is square...
                 if len(delta.shape) == 2:
                     # TODO: consider storing the shape in the layer instance
-                    size = np.sqrt(delta.shape[1] / layer.filter_width)
-                    new_shape = (delta.shape[0], size, size, layer.filter_width)
-                    print('old', delta.shape, 'new', new_shape)
-                    delta = self.dense_to_sparse(delta, new_shape)
+                    # size = np.sqrt(delta.shape[1] / layer.filter_width)
+                    # new_shape = (delta.shape[0], size, size, layer.filter_width)
+                    # delta = self.dense_to_sparse(delta, new_shape
+                    delta = self.dense_to_sparse(delta, layer.shape)
                 delta = self.pool_backprop_reshape(delta, a, layer)
 
             # perform backprop for a convolution layer
             elif layer.type == 'conv':
-                # delta = self.conv_backprop(delta, Z[-i-1], layer[-i+1])
-                z = Z[-i]
-                activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
-                delta = np.dot(delta, self.layers[-i+1].weights * activation_prime)
-                self.layers[-i].nablab = delta.mean(axis=0)
-                self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
+                # z = Z[-i]
+                # activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
+                # delta = np.dot(delta, self.layers[-i+1].weights * activation_prime)
+                # self.layers[-i].nablab = delta.mean(axis=0)
+                # self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
+                delta = self.conv_backprop(delta, layer)
 
             # fc layer backprop
             else:
@@ -458,78 +564,25 @@ class Network(object):
                 else:
                     layer.nablaw = np.dot(delta.T, A[-i-1])
 
-
-        ### End rewrite
-
-        # # initial error, difference between the final output layer and y.
-        # # TODO: Should I be using the cross-entropy/softmax function here rather than a difference? yes
-        # output = self.layers[-1]
-        # activation_prime = self.activation_functions[output.activation + '_prime'](Z[-2])
-        # delta = (A[-1] - y) * activation_prime
-        # # store bias gradient as initial error
-        # self.layers[-1].nablab = delta.mean()
-        #
-        # # Check matrix shape for previous activation
-        # if len(A[-2].shape) == 4:
-        #     a2 = self.sparse_to_dense(A[-2])
-        #     self.layers[-1].nablaw = np.dot(delta.T, a2)
-        # else:
-        #     self.layers[-1].nablaw = np.dot(delta.T, A[-2])
-        #
-        # # start main backprop loop
-        # for i in range(2, len(self.layers)):
-        #     layer = self.layers[-i]
-        #     print(layer)
-        #     print(delta.shape)
-        #     # backprop is different for pool layers
-        #     if layer.type == 'pool':
-        #         a = A[-i-1]
-        #         # TODO: check for what type of feedforward was used e.g reshape or loopception
-        #         # reshape from fc layer, assumes that filter is square...
-        #         if len(delta.shape) == 2:
-        #             size = delta.shape[1] / layer.filter_width
-        #             new_shape = (delta.shape[0], size, size, layer.filter_width)
-        #             delta = self.dense_to_sparse(delta, new_shape)
-        #             print(delta.shape)
-        #         delta = self.pool_backprop_reshape(delta, a, layer)
-        #
-        #     # perform backprop for a convolution layer
-        #     elif layer.type == 'conv':
-        #         # delta = self.conv_backprop(delta, Z[-i-1], layer[-i+1])
-        #         z = Z[-i]
-        #         activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
-        #         delta = np.dot(delta, self.layers[-i+1].weights * activation_prime)
-        #         self.layers[-i].nablab = delta.mean(axis=0)
-        #         self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
-        #
-        #     # perform backprop for a fully-connected layer
-        #     else:
-        #         if self.layers[-i].type == 'pool':
-        #             # TODO: is this correct? Probably not
-        #             activation_prime = 1
-        #         else:
-        #             z = Z[-i]
-        #             activation_prime = self.activation_functions[self.layers[-i].activation + '_prime'](z)
-        #         delta = np.dot(delta, self.layers[-i+1].weights.T) * activation_prime
-        #
-        #         self.layers[-i].nablab = delta.mean(axis=0)
-        #         # check shape work for dot product, if not reshape it
-        #         if len(A[-i-1].shape) > 2:
-        #             a = self.sparse_to_dense(A[-i-1])
-        #             self.layers[-i].nablaw = np.dot(delta.T, a)
-        #         else:
-        #             self.layers[-i].nablaw = np.dot(delta.T, A[-i-1])
-
-    def conv_backprop(self, delta, z, conv_layer):
+    def conv_backprop(self, delta, conv_layer):
         """
-
+        # TODO: Write explanation
         :param delta:
         :param activation:
         :param pool_layer:
         :return:
         """
-        activation_prime = self.activation_functions[conv_layer.activation + '_prime'](z)
-        delta = np.dot(delta, conv_layer.weights) * activation_prime
+        conv_layer.nablab = np.sum(delta, axis=(0, 1, 2))
+        num_filters, filter_width, filter_height, _ = conv_layer.weights.shape
+        padding, stride = conv_layer.padding, conv_layer.stride
+
+        delta_reshaped = delta.transpose(1, 2, 3, 0).reshape(num_filters, -1)
+        conv_layer.nablaw = np.dot(delta_reshaped, conv_layer.X_cols.T)
+        conv_layer.nablaw = conv_layer.nablaw.reshape(conv_layer.weights.shape)
+
+        delta_cols = np.dot(conv_layer.weights.reshape(num_filters, -1).T, delta_reshaped)
+        delta = self.col2im(delta_cols, conv_layer.shape, filter_height, filter_width,
+                            padding, stride)
 
         return delta
 
@@ -554,16 +607,16 @@ class Network(object):
         """
         # TODO: Generalise to any pool layer, currently this is for a max pool
         x_reshaped = pool_layer.reshaped
-        dx_reshaped = np.zeros_like(x_reshaped)
+        delta_reshaped = np.zeros_like(x_reshaped)
         # act_newaxis = activation[:, :, np.newaxis, :, np.newaxis, :]
         act_newaxis = activation.reshape(x_reshaped.shape)
         mask = (x_reshaped == act_newaxis)
         delta_newaxis = delta[:, : , np.newaxis, :, np.newaxis, :]
         # delta_newaxis = delta.reshape(x_reshaped.shape)
-        delta_broadcast, _ = np.broadcast_arrays(delta_newaxis, dx_reshaped)
-        dx_reshaped[mask] = delta_broadcast[mask]
-        dx_reshaped /= np.sum(mask, axis=(2, 4), keepdims=True)
-        dx = dx_reshaped.reshape(activation.shape)
+        delta_broadcast, _ = np.broadcast_arrays(delta_newaxis, delta_reshaped)
+        delta_reshaped[mask] = delta_broadcast[mask]
+        delta_reshaped /= np.sum(mask, axis=(2, 4), keepdims=True)
+        dx = delta_reshaped.reshape(activation.shape)
 
         return dx
 
@@ -641,8 +694,9 @@ class Network(object):
                 if val_cost < self.min_val_err:
                     self.min_val_err = val_cost
                     for l in self.layers:
-                        l.best_weights = l.weights
-                        l.best_bias = l.bias
+                        if l.type != 'pool':
+                            l.best_weights = l.weights
+                            l.best_bias = l.bias
 
                 # early stopping starts tracking after first 10 epochs to allow for initial fluctuations at
                 # high learning rates
@@ -650,8 +704,9 @@ class Network(object):
                     print("Stopping early, epoch %d \t loss rate: %.3f \t Val Error: %.6f"
                           % (j, loss_rate, self.min_val_err))
                     for l in self.layers:
-                        l.weights = l.best_weights
-                        l.bias = l.best_bias
+                        if l.type != 'pool':
+                            l.weights = l.best_weights
+                            l.bias = l.best_bias
                     # exit function
                     return None
             else:
@@ -918,16 +973,15 @@ class Metrics(object):
 
 ###################################################
 # testing
-
 # layers = [
 #     {'type':'conv', 'depth':3, 'num_filters':32, 'filter_size':3},
 #     {'type':'conv', 'depth':32, 'num_filters':32, 'filter_size':3},
-#     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
+#     {'type': 'pool', 'filter_width':2, 'filter_height':2, 'stride':2, 'activation':'max'},
 #     {'type':'conv', 'depth':32, 'num_filters':64, 'filter_size':3},
 #     {'type':'conv', 'depth':64, 'num_filters':64, 'filter_size':3},
-#     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
-#     {'type': 'fc', 'inner':12*12*64, 'outer':500, 'activation':'sigmoid'},
-#     {'type': 'fc', 'inner':500, 'outer':1, 'activation':'sigmoid'}
+#     {'type': 'pool', 'filter_width': 5, 'filter_height':5, 'stride':5, 'activation':'max'},
+#     {'type': 'fc', 'inner':1600, 'outer':1600, 'activation':'relu'},
+#     {'type': 'fc', 'inner':1600, 'outer':1, 'activation':'relu'}
 # ]
 
 # smaller net
@@ -958,18 +1012,26 @@ class Metrics(object):
 # FC Network
 
 layers=[
-    {'type':'conv', 'depth':3, 'num_filters':2, 'filter_size':3},
+    {'type':'conv', 'depth':3, 'num_filters':10, 'filter_size':3},
+    {'type':'conv', 'depth':10, 'num_filters':10, 'filter_size':3},
     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
-    {'type': 'fc', 'inner':1250, 'outer':500, 'activation':'sigmoid'},
-    {'type': 'fc', 'inner':500, 'outer':50, 'activation':'sigmoid'},
+    {'type': 'fc', 'inner':6250, 'outer':6250, 'activation':'sigmoid'},
+    {'type': 'fc', 'inner':6250, 'outer':50, 'activation':'sigmoid'},
     {'type': 'fc', 'inner':50, 'outer':1, 'activation':'sigmoid'}
 ]
 nn = Network(layers)
 print(nn.layers)
+np.random.seed = 42
 X = np.random.rand(10, 50, 50, 3)
 y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
+X_val = np.random.rand(2, 50, 50, 3)
+y_val = np.array([1,0]).reshape((2,1))
 a,z = nn.feedforward(X)
 print([x.shape for x in z])
 nn.backprop(X, y)
 print("Done")
-nn.stochastic_gradient_descent(X, y, 50, 10, eta=1e-2, momentum='rmsprop')
+nn.stochastic_gradient_descent(X, y, 100, 5, eta=1e-2, momentum='rmsprop', Xval=X_val, yval=y_val)
+
+# testing im2col
+# conv_layer = nn.layers[0]
+# out = nn.conv_feedforward(X, conv_layer)
