@@ -772,7 +772,7 @@ class Network(object):
                     l.weights -= eta * (1 / m * l.nablaw - lambda_ * l.weights)
 
 
-    def cost_function(self, y, h, m, lambda_):
+    def cost_function(self, y, h, m, lambda_ = 0.0):
         """
         Logloss cost function
         :param y: Binary array of ground truth in the shape m x num classes
@@ -1010,7 +1010,7 @@ class Metrics(object):
 # delta3 = nn.pool_backprop_reshape(delta2, a[-3], nn.layers[-2])
 
 # FC Network
-
+#
 layers=[
     {'type':'conv', 'depth':3, 'num_filters':10, 'filter_size':3},
     {'type':'conv', 'depth':10, 'num_filters':10, 'filter_size':3},
@@ -1019,18 +1019,18 @@ layers=[
     {'type': 'fc', 'inner':6250, 'outer':50, 'activation':'sigmoid'},
     {'type': 'fc', 'inner':50, 'outer':1, 'activation':'sigmoid'}
 ]
-nn = Network(layers)
-print(nn.layers)
-np.random.seed = 42
-X = np.random.rand(10, 50, 50, 3)
-y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
-X_val = np.random.rand(2, 50, 50, 3)
-y_val = np.array([1,0]).reshape((2,1))
-a,z = nn.feedforward(X)
-print([x.shape for x in z])
-nn.backprop(X, y)
-print("Done")
-nn.stochastic_gradient_descent(X, y, 100, 5, eta=1e-2, momentum='rmsprop', Xval=X_val, yval=y_val)
+# nn = Network(layers)
+# print(nn.layers)
+# np.random.seed = 42
+# X = np.random.rand(10, 50, 50, 3)
+# y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
+# X_val = np.random.rand(2, 50, 50, 3)
+# y_val = np.array([1,0]).reshape((2,1))
+# a,z = nn.feedforward(X)
+# print([x.shape for x in z])
+# nn.backprop(X, y)
+# print("Done")
+# nn.stochastic_gradient_descent(X, y, 100, 5, eta=1e-2, momentum='rmsprop', Xval=X_val, yval=y_val)
 
 # testing im2col
 # conv_layer = nn.layers[0]
