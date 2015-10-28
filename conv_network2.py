@@ -19,23 +19,27 @@ class Layer(object):
         self.outer = outer
         self.activation = activation
         self.type = 'fc'
+        eps = 1
         # initialise weights and bias
-        if activation == 'relu':
-            self.weights = np.random.randn(self.outer, self.inner) * np.sqrt(2.0 / (self.inner + self.outer))
+        if activation != 'sigmoid':
+            # relu requires carful initialisation to prevent exploding activations
+            # size = (self.outer  * np.sqrt(2.0 / (self.inner + self.outer)))
+            self.weights = np.random.randn(self.outer, self.inner) * eps # * np.sqrt(2.0 / (self.inner + self.outer))
+            self.bias = np.random.randn(self.outer, 1).T * eps
         else:
             self.weights = np.random.randn(self.outer, self.inner) / np.sqrt(self.inner + self.outer)
-        # create bias numpy array
-        self.bias = np.random.randn(self.outer, 1).T
+            self.bias = np.random.randn(self.outer, 1).T
+
         # placeholder numpy array for gradient of weights and biases
-        self.nablaw = np.zeros(self.weights.shape)
-        self.nablab = np.zeros(self.bias.shape)
+        self.nablaw = np.zeros_like(self.weights)
+        self.nablab = np.zeros_like(self.bias)
         # Velocity parameter for momentum
         self.velocity = 0.0
         # early stopping weights/bias
-        self.best_weights = np.zeros(self.weights.shape)
-        self.best_bias = np.zeros(self.bias.shape)
+        self.best_weights = np.zeros_like(self.weights)
+        self.best_bias = np.zeros_like(self.bias)
         #RMS/Adaprop cache variable
-        self.cache = np.zeros(self.weights.shape)
+        self.cache = np.zeros_like(self.weights)
 
 
 class ConvolutionalLayer(object):
@@ -64,8 +68,14 @@ class ConvolutionalLayer(object):
         # check filter size is odd
         assert self.filter_size % 2 == 1, 'Filter size must be odd, %d is even' % self.filter_size
 
-        # initialise weights and biases
-        self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size)
+        # # initialise weights and biases
+        # if self.activation == 'relu':
+        #     eps = 5e-3
+        #     self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size) * eps
+        #     self.bias = np.random.randn(self.num_filters) * eps
+        # else:
+        denom = np.sqrt(self.num_filters + self.depth + self.filter_size + self.filter_size)
+        self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size) / denom
         self.bias = np.random.randn(self.num_filters)
 
         # placeholder numpy array for gradient of weights and biases
@@ -114,6 +124,7 @@ class MaxPoolLayer(object):
         self.stride = stride
         # class variable to store the indices of max
         self.indices = list()
+        self.weights = 0
 
     def pool_function(self, x, type='reshape'):
         """
@@ -424,8 +435,6 @@ class Network(object):
         return output, x_reshaped
 
 
-    # TODO: convoluted/pooled backprop, shit is getting messy
-
     def backprop(self, X, y, p=1.0):
         """
         Backpropogation algorithm
@@ -436,10 +445,8 @@ class Network(object):
         """
         # get activations and z-values
         A, Z = self.feedforward(X, p=p)
-
         # TODO: Should I be using the cross-entropy/softmax function here rather than a difference?
         output = self.layers[-1]
-        activation_prime = self.activation_functions[output.activation + '_prime'](Z[-1])
         delta = (A[-1] - y)
 
         # store bias gradient as initial error
@@ -449,7 +456,7 @@ class Network(object):
         for i in range(2, len(self.layers)):
             #backprop is different for pool layers
             layer = self.layers[-i]
-
+            print('d', delta.mean(), 'a', A[-i].mean())
             # backprop for pool layer
             if layer.type == 'pool':
                 a = A[-i-1]
@@ -596,8 +603,8 @@ class Network(object):
 
             # If supplied with validation data, calculate validation error and perform early stopping
             if Xval is not None and yval is not None:
-                val_activations, _ = self.feedforward(Xval)
-                val_cost = self.cost_function(yval, val_activations[-1], Xval.shape[0], lambda_)
+                val_h = self.predict(Xval)
+                val_cost = self.cost_function(yval, val_h, Xval.shape[0], lambda_)
                 self.val_error.append(val_cost)
 
                 # early stopping regularisation, calculate loss rate
@@ -624,10 +631,9 @@ class Network(object):
                     return None
             else:
                 val_cost = 1.0
-
             # get the training error
-            activations, _ = self.feedforward(X)
-            cost = self.cost_function(y, activations[-1], m, lambda_)
+            h = self.predict(X, p)
+            cost = self.cost_function(y, h, m, lambda_)
             self.train_error.append(cost)
 
             # Print the training error every 10 epochs
@@ -694,8 +700,10 @@ class Network(object):
         :return: Logloss cost
         """
         # cross-entropy error/cost function c.f. https://en.wikipedia.org/wiki/Cross_entropy
-        J = - 1 / m * (np.sum(y * np.log(h + 1e-8) + (1 - y) * np.log(1 - (h + 1e-8))))
-        # J = - 1 / m * np.sum(y * np.log(h + 1e-8))
+        if nn.layers[-1].activation == 'softmax':
+            J = - 1 / m * np.sum(y * np.log(h + 1e-8))
+        else:
+            J = - 1 / m * (np.sum(y * np.log(h + 1e-8) + (1 - y) * np.log(1 - (h + 1e-8))))
 
         # L2 regularisation
         for l in self.layers:
@@ -954,22 +962,23 @@ class Metrics(object):
 # FC Network
 
 layers=[
-    {'type':'conv', 'depth':3, 'num_filters':10, 'filter_size':3, 'activation':'sigmoid'},
-    {'type':'conv', 'depth':10, 'num_filters':10, 'filter_size':3, 'activation':'sigmoid'},
+    {'type':'conv', 'depth':3, 'num_filters':10, 'filter_size':3, 'activation':'relu'},
+    {'type':'conv', 'depth':10, 'num_filters':10, 'filter_size':3, 'activation':'relu'},
     {'type': 'pool', 'filter_width': 2, 'filter_height':2, 'stride':2, 'activation':'max'},
-    {'type': 'fc', 'inner':6250, 'outer':6250, 'activation':'sigmoid'},
-    {'type': 'fc', 'inner':6250, 'outer':50, 'activation':'sigmoid'},
-    {'type': 'fc', 'inner':50, 'outer':1, 'activation':'sigmoid'}
+    {'type': 'fc', 'inner':6250, 'outer':6250, 'activation':'relu'},
+    {'type': 'fc', 'inner':6250, 'outer':200, 'activation':'relu'},
+    {'type': 'fc', 'inner':200, 'outer':1, 'activation':'softmax'}
 ]
 nn = Network(layers)
 print([l.type for l in nn.layers])
-np.random.seed = 42
+np.random.seed = 33
 X = np.random.rand(10, 3, 50, 50)
+X = (X - X.mean()) / X.std()
 y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
-X_val = np.random.rand(2, 3, 50, 50)
+X_val = X[:2]
 y_val = np.array([1,0]).reshape((2,1))
-a,z = nn.feedforward(X)
-print([x.shape for x in z])
-nn.backprop(X, y)
-print("Done")
-nn.stochastic_gradient_descent(X, y, 100, 2, eta=1e-2, momentum='nag', Xval=X_val, yval=y_val, alpha=100)
+# a,z = nn.feedforward(X)
+# print([x.shape for x in z])
+# nn.backprop(X, y)
+# print("Done")
+nn.stochastic_gradient_descent(X, y, 5, 10, eta=1e-1, momentum='nag', Xval=X_val, yval=y_val, alpha=100)
