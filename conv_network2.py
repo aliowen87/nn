@@ -5,7 +5,7 @@ import random
 
 class Layer(object):
 
-    def __init__(self, inner, outer, activation):
+    def __init__(self, inner, outer, activation, scale=5e-3):
         """
         Layer class is used to create the layers of the network, initialising the weights and biases and
         setting up class variables for parameters that are updated with each minibatch (e.g. caching for
@@ -19,15 +19,17 @@ class Layer(object):
         self.outer = outer
         self.activation = activation
         self.type = 'fc'
-        eps = 1
         # initialise weights and bias
         if activation != 'sigmoid':
             # relu requires carful initialisation to prevent exploding activations
             # size = (self.outer  * np.sqrt(2.0 / (self.inner + self.outer)))
-            self.weights = np.random.randn(self.outer, self.inner) * eps # * np.sqrt(2.0 / (self.inner + self.outer))
-            self.bias = np.random.randn(self.outer, 1).T * eps
+            # xavier initialisation?
+            xav = np.sqrt(2 / self.inner)
+            self.weights = np.random.randn(self.outer, self.inner) * xav # * np.sqrt(2.0 / (self.inner + self.outer))
+            print('mean', self.weights.mean(), 'var', self.weights.var(), 'x', xav**2)
+            self.bias = np.random.randn(self.outer, 1).T * xav
         else:
-            self.weights = np.random.randn(self.outer, self.inner) / np.sqrt(self.inner + self.outer)
+            self.weights = np.random.randn(self.outer, self.inner) * np.sqrt(2 / (self.inner + self.outer))
             self.bias = np.random.randn(self.outer, 1).T
 
         # placeholder numpy array for gradient of weights and biases
@@ -53,7 +55,7 @@ class ConvolutionalLayer(object):
     # Results in F.F.D1 weights per filter i.e. (F.F.D1).K weights and K biases
     """
 
-    def __init__(self, channels, num_filters, filter_size, activation='relu'):
+    def __init__(self, channels, num_filters, filter_size, activation='relu', inner=5000):
         """
         :param channels: Number of channels in the input matrix, i.e. depth of matrix
         :param num_filters: number of filters to use (K)
@@ -74,9 +76,10 @@ class ConvolutionalLayer(object):
         #     self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size) * eps
         #     self.bias = np.random.randn(self.num_filters) * eps
         # else:
-        denom = np.sqrt(self.num_filters + self.depth + self.filter_size + self.filter_size)
-        self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size) / denom
-        self.bias = np.random.randn(self.num_filters)
+        # denom = np.sqrt(self.num_filters + self.depth + self.filter_size + self.filter_size)
+        xav = np.sqrt(2 / inner)
+        self.weights = np.random.randn(self.num_filters, self.depth, self.filter_size, self.filter_size) * xav
+        self.bias = np.random.randn(self.num_filters) * xav
 
         # placeholder numpy array for gradient of weights and biases
         self.nablaw = np.zeros_like(self.weights)
@@ -142,7 +145,7 @@ class Network(object):
     """
     Main neural network class, sets up the network architecture
     """
-    def __init__(self, layers, seed=42):
+    def __init__(self, X, layers, seed=42, scale=1e-3):
         """
         The Network class contains the activation and stochastic gradient descent functions necessary to
         carry out learning.
@@ -156,6 +159,9 @@ class Network(object):
         # seed random number generator
         np.random.seed(seed)
 
+        # scaling factor for initialisation
+        self.scale = scale
+
         # dictionary of activation functions
         self.activation_functions = {
             'sigmoid': self.sigmoid,
@@ -167,7 +173,7 @@ class Network(object):
             'softmax': self.softmax,
             'softmax_prime': self.softmax_prime
         }
-
+        shape = X.shape
         # initialise layers
         self.layers = list()
         for layer in layers:
@@ -177,19 +183,26 @@ class Network(object):
                 depth = layer['depth']
                 num_filters = layer['num_filters']
                 filter_size = layer['filter_size']
-                self.layers.append(ConvolutionalLayer(depth, num_filters, filter_size))
+                activation = layer['activation']
+                # send number of incoming connections
+                inner = shape[1] * shape[2] * shape[3]
+                # output shape
+                shape = (shape[0], num_filters, shape[2], shape[3])
+                self.layers.append(ConvolutionalLayer(depth, num_filters, filter_size, inner=inner))
             elif layer['type'] == 'pool':
                 activation = layer['activation']
                 filter_width = layer['filter_width']
                 filter_height = layer['filter_height']
                 stride = layer['stride']
+                # output shape
+                shape = (shape[0], shape[1], shape[2] / filter_height, shape[3] / filter_width)
                 # TODO: add logic test for pool type once others are implemented
                 self.layers.append(MaxPoolLayer(filter_width, filter_height, stride))
             else:
                 activation = layer['activation']
                 inner = layer['inner']
                 outer = layer['outer']
-                self.layers.append(Layer(inner, outer, activation))
+                self.layers.append(Layer(inner, outer, activation, scale=scale))
 
         # variables for storing errors for plotting once learning is complete
         self.train_error = list()
@@ -700,7 +713,7 @@ class Network(object):
         :return: Logloss cost
         """
         # cross-entropy error/cost function c.f. https://en.wikipedia.org/wiki/Cross_entropy
-        if nn.layers[-1].activation == 'softmax':
+        if self.layers[-1].activation == 'softmax':
             J = - 1 / m * np.sum(y * np.log(h + 1e-8))
         else:
             J = - 1 / m * (np.sum(y * np.log(h + 1e-8) + (1 - y) * np.log(1 - (h + 1e-8))))
@@ -740,6 +753,7 @@ class Network(object):
         :param z: Numpy array of the form X.W.T
         :return:
         """
+        print('z', z.mean(), 'relu', (z * (z > 0)).mean())
         return z * (z > 0)
 
 
@@ -749,7 +763,7 @@ class Network(object):
         :param z: Numpy array of the form activation - y/ grad.T.activation[-1] etc
         :return: ReLU gradient (numpy array)
         """
-        z[z <= 0] = 0
+        z[z <= 0] = 0.0
         return z
 
 
@@ -764,41 +778,13 @@ class Network(object):
 
     def softmax(self, z):
         e = np.exp(z)
-        return e / np.sum(e)
+        return  e / np.sum(e)
 
-
+    # unlikely to be used
     def softmax_prime(self, z):
         y = self.softmax(z)
         return y * (1 - y)
 
-
-    # def gradient_check(self, X, y, eps=1e-5):
-    #     # TODO: Complete/fix gradient check code
-    #     # run gradient function for a few epochs
-    #     epochs = 30
-    #     mini_batch_size = 50
-    #     lambda_ = 0.0
-    #     self.stochastic_gradient_descent(X, y, epochs, mini_batch_size, lambda_=lambda_)
-    #     m = X.shape[0]
-    #
-    #     for i, l in enumerate(self.layers):
-    #         # For gradient checking I need to take each element of the gradient
-    #         # and compare it to the numerical gradient calculated by G(W(i) + eps)) - G(W(i) - eps)) / 2*eps
-    #         # Looks like previously I was comparing tht weights rather than gradW, which is obvs wrong
-    #         # Diff should be ~< eps
-    #         weights = l.weights
-    #         gradients = l.nablaw
-    #         plus = weights + eps
-    #         l.weights = plus
-    #         actplus, _ = self.feedforward(X)
-    #         costplus = self.cost_function(y, actplus[-1], m, lambda_)
-    #         minus = weights - eps
-    #         l.weights = minus
-    #         actminus, _ = self.feedforward(X)
-    #         costminus = self.cost_function(y, actminus[-1], m, lambda_)
-    #         grad = (costplus - costminus) / (2 * eps)
-    #         difference = (np.sum(gradients) - grad) / (np.sum(gradients) + grad)
-    #         print("Difference for Layer %d: %.6f" %(i, difference))
 
     def gradient_check(self, X, forward, eps=1e-8):
         """
@@ -960,6 +946,11 @@ class Metrics(object):
 # delta3 = nn.pool_backprop_reshape(delta2, a[-3], nn.layers[-2])
 
 # FC Network
+X = np.random.rand(10, 3, 50, 50)
+X = (X - X.mean()) / X.std()
+y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
+X_val = X[:2]
+y_val = np.array([1,0]).reshape((2,1))
 
 layers=[
     {'type':'conv', 'depth':3, 'num_filters':10, 'filter_size':3, 'activation':'relu'},
@@ -969,16 +960,12 @@ layers=[
     {'type': 'fc', 'inner':6250, 'outer':200, 'activation':'relu'},
     {'type': 'fc', 'inner':200, 'outer':1, 'activation':'softmax'}
 ]
-nn = Network(layers)
+nn = Network(X, layers, scale=7.5e-4)
 print([l.type for l in nn.layers])
 np.random.seed = 33
-X = np.random.rand(10, 3, 50, 50)
-X = (X - X.mean()) / X.std()
-y = np.array([0, 1, 1, 0, 1, 1, 0, 1, 0, 0]).reshape((10,1))
-X_val = X[:2]
-y_val = np.array([1,0]).reshape((2,1))
+
 # a,z = nn.feedforward(X)
 # print([x.shape for x in z])
 # nn.backprop(X, y)
 # print("Done")
-nn.stochastic_gradient_descent(X, y, 5, 10, eta=1e-1, momentum='nag', Xval=X_val, yval=y_val, alpha=100)
+nn.stochastic_gradient_descent(X, y, 5, 10, eta=1e-1, momentum='classic', Xval=X_val, yval=y_val, alpha=100)
